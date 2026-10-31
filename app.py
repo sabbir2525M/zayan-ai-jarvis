@@ -23,7 +23,7 @@ except Exception:
 
 load_dotenv()
 
-APP_TITLE = "ELINA AI — Personal JARVIS"
+APP_TITLE = "ELINA AI — Personal AI Workspace"
 DB_PATH = os.getenv("ZAYAN_DB_PATH", "zayan_ai_data.db")
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
@@ -31,9 +31,9 @@ st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide", initia
 # ----------------------------- Theme -----------------------------
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap');
+/* Local system fonts only: avoid blocking external font downloads. */
 :root{--bg:#080e1d;--panel:#101b32;--panel2:#142443;--line:rgba(96,145,235,.22);--muted:#8fa4c7;--cyan:#47d7f2;--violet:#7768ff}
-html,body,[class*="css"]{font-family:Inter,'Hind Siliguri',sans-serif}
+html,body,[class*="css"]{font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
 .stApp{background:radial-gradient(ellipse at 12% 0%,rgba(103,88,255,.17),transparent 32%),radial-gradient(ellipse at 92% 12%,rgba(36,195,225,.12),transparent 28%),var(--bg);color:#edf4ff}
 [data-testid="stHeader"]{background:rgba(8,14,29,.72)}
 .block-container{max-width:1500px;padding-top:1.2rem;padding-bottom:3rem}
@@ -67,22 +67,16 @@ hr{border-color:var(--line)}
 [data-testid="stSidebar"] [data-testid="stRadio"] label{padding:8px 10px;border-radius:9px}
 @media(max-width:800px){.hero{padding:22px}.hero h1{font-size:1.55rem}.core{min-height:170px}.core-ball{width:125px;height:125px}}
 
-/* ELINA animated core and rotating ambient theme */
-.stApp:before{
- content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.32;
- background:
- radial-gradient(circle at 15% 25%,rgba(44,208,255,.16),transparent 24%),
- radial-gradient(circle at 82% 18%,rgba(133,91,255,.18),transparent 26%),
- radial-gradient(circle at 70% 82%,rgba(27,224,185,.10),transparent 25%);
- animation:ambientShift 18s ease-in-out infinite alternate;
-}
-@keyframes ambientShift{0%{transform:translate3d(-1%,0,0) scale(1)}100%{transform:translate3d(1%,1%,0) scale(1.05);filter:hue-rotate(32deg)}}
-.core{position:relative}
+.stApp:before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.22;
+background:radial-gradient(circle at 18% 22%,rgba(56,210,255,.18),transparent 26%),
+radial-gradient(circle at 82% 30%,rgba(130,95,255,.18),transparent 28%),
+radial-gradient(circle at 55% 90%,rgba(36,220,185,.10),transparent 25%);
+animation:elinaAmbient 22s ease-in-out infinite alternate}
+@keyframes elinaAmbient{from{transform:translate3d(-.5%,0,0) scale(1)}to{transform:translate3d(.5%,.7%,0) scale(1.035);filter:hue-rotate(24deg)}}
 .core-ball{position:relative;isolation:isolate}
-.core-ball:before,.core-ball:after{content:"";position:absolute;inset:-15px;border-radius:50%;border:1px solid rgba(99,235,255,.6);animation:orbit 8s linear infinite;z-index:-1}
-.core-ball:after{inset:-27px;border-color:rgba(142,120,255,.42);animation-duration:13s;animation-direction:reverse}
-@keyframes orbit{to{transform:rotate(360deg) scale(1.06)}}
-.hero h1{letter-spacing:-.035em}
+.core-ball:before,.core-ball:after{content:"";position:absolute;inset:-13px;border-radius:50%;border:1px solid rgba(100,235,255,.55);z-index:-1;animation:elinaOrbit 11s linear infinite}
+.core-ball:after{inset:-25px;border-color:rgba(145,120,255,.4);animation-duration:17s;animation-direction:reverse}
+@keyframes elinaOrbit{to{transform:rotate(360deg) scale(1.04)}}
 
 </style>
 """, unsafe_allow_html=True)
@@ -167,7 +161,7 @@ if not APP_PASSWORD:
     st.stop()
 
 if not st.session_state.authenticated:
-    st.markdown('<div class="hero"><div class="eyebrow">PRIVATE AI BUSINESS WORKSPACE</div><h1>🤖 ELINA AI — JARVIS</h1><p>Your personal ELINA AI command center for conversations, reports, team operations and payments.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><div class="eyebrow">PRIVATE AI BUSINESS WORKSPACE</div><h1>🤖 ELINA AI — JARVIS</h1><p>Your personal command center for conversations, affiliate reporting, team operations and payments.</p></div>', unsafe_allow_html=True)
     a,b,c = st.columns([1,1.2,1])
     with b:
         with st.container(border=True):
@@ -183,9 +177,10 @@ if not st.session_state.authenticated:
 
 # ----------------------------- Helpers -----------------------------
 SYSTEM_PROMPT = """You are ELINA AI, a private personal JARVIS-style assistant and affiliate marketing business copilot.
-Your owner's full name is Sabbir Alam. He is the Boss and owner of this private workspace.
+Your owner's name is Sabbir Alam. He is the owner of this private workspace.
 Address him naturally as "Boss" or "Sabbir" when appropriate. Never say "Boss Sabbir".
-A suitable greeting is "Welcome Boss". Do not force his name into every sentence. Never confuse the owner's name with the AI's name: you are ELINA AI.
+Use "Welcome Boss" as the dashboard greeting. Do not force his name into every sentence.
+You are ELINA AI. Use a warm, natural, respectful feminine communication style in Bangla and English.
 Understand Bengali and English. Reply in the language the user uses; default to natural Bangla when they use Bangla.
 Be concise, practical and commercially aware. The Boss operates affiliate marketing campaigns, especially US credit-monitoring and identity-protection offers, uses Facebook Ads, manages a team, and needs help with affiliate reports, Sub IDs, payouts, payment reconciliation, tasks and professional English manager messages.
 Never claim to have sent an email, transferred money, accessed an external affiliate account, or changed a live campaign unless a connected tool actually did so.
@@ -423,15 +418,15 @@ if page=="Overview":
         "আজকে কী নিয়ে ভাবছেন? আমি কীভাবে সাহায্য করতে পারি?",
         "আপনার আজকের পরিকল্পনা কী, Boss? ELINA প্রস্তুত।",
         "নতুন দিন, নতুন পরিকল্পনা—বলুন Boss, কোথা থেকে শুরু করব?",
-        "আপনার কাজগুলো গুছিয়ে দিতে আমি প্রস্তুত, Boss Sabbir।",
+        "আজ ধারাবাহিক থাকুন—ছোট অগ্রগতিই বড় ফল তৈরি করে।",
         "আজকের লক্ষ্য কী? চলুন একসাথে এগিয়ে যাই, Boss।",
         "আপনাকে আবার পেয়ে ভালো লাগছে, Boss! কী করতে পারি?",
-        "আপনার পরবর্তী নির্দেশের অপেক্ষায় আছি, Boss Sabbir।",
+        "আজকের সবচেয়ে গুরুত্বপূর্ণ কাজটি আগে শেষ করুন—আপনি এগোচ্ছেন।",
     ]
     daily_welcome = daily_welcomes[date.today().toordinal() % len(daily_welcomes)]
     left,mid,right=st.columns([1.1,1,1.1],gap="large")
     with st.container():
-        st.markdown(f'<div class="hero"><div class="eyebrow">ELINA AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome Boss 👋</h1><p><strong>✦ Daily Motivation</strong><br>{daily_welcome}<br>Your personal AI assistant and business command center is ready.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
+        st.markdown(f'<div class="hero"><div class="eyebrow">ELINA AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome Boss 👋</h1><p>{daily_welcome}<br>আজকের লক্ষ্য ঠিক করুন, ধারাবাহিকভাবে এগিয়ে চলুন।<br>Your personal ELINA AI command center is ready.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
     with left:
         st.markdown('<div class="panel"><div class="smallcaps">IDENTITY</div><div class="panel-title">ELINA AI</div><div class="muted">Personal JARVIS Business Copilot</div><br><div class="smallcaps">INTERFACE MODE</div><div class="panel-title">Hybrid Command Center</div><div class="muted">Bengali + English · Desktop + Mobile</div></div>',unsafe_allow_html=True)
     with mid:
@@ -482,7 +477,7 @@ elif page=="AI Assistant":
 elif page=="Voice Assistant":
     st.markdown('<div class="eyebrow">VOICE INTERFACE</div>',unsafe_allow_html=True)
     st.title("◉ ELINA Live Voice")
-    st.caption("Press to record, speak in Bangla or English, then ELINA transcribes and replies in a female-sounding voice. This is turn-based voice chat, not continuous always-on listening.")
+    st.caption("Record a message in Bangla or English. ELINA transcribes it, replies, and speaks with a female-sounding preset. This is press-to-talk, not always-on live audio.")
     if not client:
         st.warning("Voice AI needs OPENAI_API_KEY in Streamlit Secrets.")
     audio=st.audio_input("🎙️ Press to record your message",key="jarvis_audio")
@@ -714,7 +709,7 @@ elif page=="Tasks":
 elif page=="Memory":
     st.markdown('<div class="eyebrow">PERSONAL CONTEXT</div>',unsafe_allow_html=True)
     st.title("◈ ELINA Memory")
-    st.caption("Save useful preferences, business context and instructions. Saved entries are included in ELINA's AI context on future chats.")
+    st.caption("Save useful business preferences and working instructions. These are added to the AI context.")
     with st.form("save_memory",clear_on_submit=True):
         cat=st.selectbox("Category",["Business","Offers & Payouts","Team","Writing Preferences","Personal Workflow","Other"])
         content=st.text_area("Memory / instruction")
@@ -737,24 +732,66 @@ elif page=="Memory":
 # ----------------------------- Email assistant -----------------------------
 elif page=="Email Assistant":
     st.markdown('<div class="eyebrow">COMMUNICATION COPILOT</div>',unsafe_allow_html=True)
-    st.title("✉ Email & Message Assistant")
-    st.caption("Create, refine and download professional email drafts. Sending and inbox access are not connected in this version; review and send drafts yourself.")
+    st.title("✉ Email & Manager Message Assistant")
+    st.caption("Paste a manager's email or message. ELINA will explain the main point, extract key points, identify what the manager needs, and prepare a suitable English reply.")
+
+    manager_message=st.text_area(
+        "Paste manager's email / message",
+        height=190,
+        placeholder="Paste the complete message from your affiliate manager here..."
+    )
+    analysis_tone=st.selectbox("Reply tone",["Professional and polite","Confident and firm","Short and direct","Friendly"],key="manager_reply_tone")
+    if st.button("Analyze message + prepare reply",type="primary",use_container_width=True):
+        if not manager_message.strip():
+            st.warning("আগে manager-এর message paste করো।")
+        elif not client:
+            st.error("OpenAI API key is required.")
+        else:
+            with st.spinner("Manager-এর message বুঝে key points বের করছি..."):
+                try:
+                    req = (
+                        "Analyze the manager's message below. Reply in clear Bangla for the explanation. "
+                        "Use exactly these headings: Main point; Key points; What the manager wants / needs from me; "
+                        "Important conditions, deadlines or risks; Suggested next action. "
+                        "Then write a concise, natural English reply in the requested tone. "
+                        "Do not invent facts, rates, dates, promises or conditions. If something is unclear, say so. "
+                        f"Reply tone: {analysis_tone}.\n\nMANAGER MESSAGE:\n{manager_message}"
+                    )
+                    result=client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role":"system","content":SYSTEM_PROMPT+"\nYou are also an expert affiliate-manager correspondence analyst. Preserve the manager's exact meaning."},
+                            {"role":"user","content":req}
+                        ],
+                        temperature=0.2,
+                        max_tokens=1200
+                    )
+                    st.session_state.manager_analysis=result.choices[0].message.content or "বিশ্লেষণ তৈরি করা যায়নি।"
+                except Exception as e:
+                    st.error(f"AI error: {e}")
+    if st.session_state.get("manager_analysis"):
+        st.markdown("### Message analysis & suggested reply")
+        st.markdown(st.session_state.manager_analysis)
+        st.download_button("Download analysis",st.session_state.manager_analysis.encode("utf-8"),"elina_manager_message_analysis.txt","text/plain")
+
+    st.divider()
+    st.subheader("Write a new message")
     recipient=st.text_input("Manager / recipient name (optional)")
     topic=st.text_input("What is the message about?",placeholder="Request weekly payment and payout increase")
     details=st.text_area("Key points to include",placeholder="I have improved traffic quality. I can scale to 50 leads per day...")
-    tone=st.selectbox("Tone",["Professional and polite","Confident and firm","Short and direct","Friendly"])
-    if st.button("Generate English draft",type="primary"):
+    tone=st.selectbox("Draft tone",["Professional and polite","Confident and firm","Short and direct","Friendly"],key="new_email_tone")
+    if st.button("Generate English draft",type="secondary"):
         if not topic.strip() or not details.strip(): st.warning("Add the topic and key points first.")
         elif not client: st.error("OpenAI API key is required.")
         else:
             with st.spinner("Drafting..."):
                 try:
                     req=f"Write a concise natural English affiliate-manager email/message. Tone: {tone}. Recipient name: {recipient or 'Manager'}. Topic: {topic}. Include these points accurately: {details}. Do not invent facts, rates, volumes or promises. Provide only the draft."
-                    out=client.chat.completions.create(model="gpt-4o-mini",messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":req}])
+                    out=client.chat.completions.create(model="gpt-4o-mini",messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":req}],temperature=0.3,max_tokens=700)
                     st.session_state.email_draft=out.choices[0].message.content
                 except Exception as e: st.error(str(e))
     if st.session_state.get("email_draft"):
-        st.text_area("Your draft",st.session_state.email_draft,height=260)
+        st.text_area("Your draft",st.session_state.email_draft,height=220)
         st.download_button("Download draft TXT",st.session_state.email_draft.encode("utf-8"),"elina_email_draft.txt","text/plain")
 
 # ----------------------------- Settings -----------------------------
@@ -769,7 +806,7 @@ elif page=="Settings":
     st.subheader("Model and voice")
     st.write("Chat model: `gpt-4o-mini`")
     st.write("Transcription: `whisper-1`")
-    st.write("Speech output: `gpt-4o-mini-tts` · voice `shimmer` (female-sounding preset; voice availability may vary)")
+    st.write("Speech output: `gpt-4o-mini-tts` · voice `shimmer` (female-sounding preset)")
     st.info("To change API credentials, use Streamlit → Manage app → Settings → Secrets. Do not paste API keys into chat or GitHub.")
     st.subheader("Data and backups")
     st.warning("Streamlit Community Cloud local files are not guaranteed to persist across rebuilds. Download regular backups or connect a managed database before relying on this as your only business ledger.")
