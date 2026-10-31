@@ -1,7 +1,9 @@
 import os
-import hmac
 import re
+import hmac
+import sqlite3
 import tempfile
+from datetime import datetime, date
 from io import BytesIO
 
 import pandas as pd
@@ -9,1058 +11,577 @@ import streamlit as st
 from dotenv import load_dotenv
 
 try:
-    import fitz  # PyMuPDF, used for text-based PDFs
-except ImportError:
-    fitz = None
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
 try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+    import fitz
+except Exception:
+    fitz = None
 
 load_dotenv()
 
-st.set_page_config(page_title="Zayan AI Dashboard", page_icon="🤖", layout="wide")
+APP_TITLE = "Zayan AI — JARVIS Business OS"
+DB_PATH = os.getenv("ZAYAN_DB_PATH", "zayan_ai_data.db")
 
+st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
 
-# --- Zayan AI website-style theme ---
+# ----------------------------- Theme -----------------------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap');
-
-:root {
-  --zayan-bg: #0b1020;
-  --zayan-panel: #121a2d;
-  --zayan-panel-2: #18233a;
-  --zayan-line: rgba(148,163,184,.16);
-  --zayan-text: #edf3ff;
-  --zayan-muted: #9aa9c2;
-  --zayan-accent: #7c6cff;
-  --zayan-cyan: #25c6da;
-}
-html, body, [class*="css"] {
-  font-family: 'Inter', 'Hind Siliguri', sans-serif;
-}
-.stApp {
-  background:
-    radial-gradient(ellipse at 12% 0%, rgba(124,108,255,.18), transparent 34%),
-    radial-gradient(ellipse at 88% 8%, rgba(37,198,218,.10), transparent 30%),
-    var(--zayan-bg);
-  color: var(--zayan-text);
-}
-[data-testid="stHeader"] { background: rgba(11,16,32,.72); }
-[data-testid="stToolbar"] { right: 1rem; }
-.block-container {
-  max-width: 1440px;
-  padding-top: 2rem;
-  padding-bottom: 3rem;
-}
-#MainMenu, footer { visibility: hidden; }
-h1, h2, h3, h4, p, label, span { letter-spacing: -.01em; }
-h1 { font-weight: 800 !important; letter-spacing: -.045em !important; }
-h2, h3 { font-weight: 700 !important; }
-.zayan-hero {
-  position: relative;
-  overflow: hidden;
-  padding: 30px 34px;
-  border: 1px solid rgba(160,174,255,.22);
-  border-radius: 24px;
-  background: linear-gradient(120deg, rgba(35,44,83,.96), rgba(18,35,58,.92) 58%, rgba(20,68,83,.82));
-  box-shadow: 0 22px 60px rgba(0,0,0,.24);
-  margin-bottom: 24px;
-}
-.zayan-hero:after {
-  content: "";
-  position: absolute;
-  width: 280px; height: 280px; right: -70px; top: -150px;
-  border-radius: 50%;
-  background: rgba(124,108,255,.25);
-  filter: blur(8px);
-}
-.zayan-brand { font-size: 2.25rem; font-weight: 800; color: #fff; margin: 0; }
-.zayan-subtitle { color: #c4cde0; margin-top: 7px; font-size: 1rem; }
-.zayan-chip {
-  display: inline-block; margin-top: 16px; margin-right: 8px;
-  padding: 6px 11px; border-radius: 999px; font-size: .78rem;
-  color: #e5e9ff; border: 1px solid rgba(255,255,255,.18);
-  background: rgba(255,255,255,.08);
-}
-div[data-testid="stTabs"] [role="tablist"] {
-  gap: 9px; border-bottom: 1px solid var(--zayan-line);
-}
-div[data-testid="stTabs"] button[role="tab"] {
-  background: rgba(255,255,255,.045);
-  border: 1px solid var(--zayan-line);
-  border-radius: 12px 12px 0 0;
-  padding: 12px 18px;
-  color: #c7d2e7;
-  font-weight: 600;
-}
-div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-  background: linear-gradient(120deg, rgba(124,108,255,.22), rgba(37,198,218,.12));
-  color: #fff; border-color: rgba(124,108,255,.5);
-}
-div[data-testid="stVerticalBlockBorderWrapper"] {
-  border: 1px solid var(--zayan-line);
-  border-radius: 18px;
-  background: rgba(18,26,45,.76);
-}
-div[data-testid="stMetric"] {
-  background: linear-gradient(145deg, rgba(26,37,62,.9), rgba(17,25,43,.9));
-  border: 1px solid var(--zayan-line);
-  border-radius: 16px; padding: 16px 18px;
-}
-div[data-testid="stMetricLabel"] { color: var(--zayan-muted); }
-div[data-testid="stMetricValue"] { color: #fff; font-weight: 800; }
-.stButton > button, .stDownloadButton > button {
-  border: 0; border-radius: 11px; padding: .62rem 1.1rem;
-  color: white; font-weight: 700;
-  background: linear-gradient(105deg, #7565f5, #397fe8);
-  box-shadow: 0 8px 22px rgba(87,105,230,.22);
-  transition: transform .15s ease, filter .15s ease;
-}
-.stButton > button:hover, .stDownloadButton > button:hover {
-  color: white; filter: brightness(1.12); transform: translateY(-1px);
-}
-input, textarea, [data-baseweb="select"] > div {
-  border-radius: 10px !important;
-}
-[data-testid="stChatMessage"] {
-  border: 1px solid var(--zayan-line);
-  border-radius: 16px; background: rgba(21,31,52,.72);
-  padding: 14px 16px;
-}
-[data-testid="stChatInput"] {
-  border: 1px solid rgba(124,108,255,.42);
-  border-radius: 15px; background: rgba(18,26,45,.95);
-}
-[data-testid="stFileUploader"] section {
-  border: 1px dashed rgba(124,108,255,.5);
-  border-radius: 14px; background: rgba(124,108,255,.045);
-}
-[data-testid="stDataFrame"], [data-testid="stTable"] {
-  border: 1px solid var(--zayan-line); border-radius: 12px; overflow: hidden;
-}
-hr { border-color: var(--zayan-line); }
-.zayan-footer {
-  color: #8291aa; font-size: .8rem; text-align: center;
-  padding: 24px 0 4px; border-top: 1px solid var(--zayan-line);
-  margin-top: 35px;
-}
-@media (max-width: 700px) {
-  .block-container { padding: 1rem .8rem 2rem; }
-  .zayan-hero { padding: 22px 20px; border-radius: 18px; }
-  .zayan-brand { font-size: 1.75rem; }
-  div[data-testid="stTabs"] [role="tablist"] { flex-wrap: wrap; }
-}
-
-/* Reference-inspired command-center layout */
-[data-testid="stSidebar"] {
-  background: linear-gradient(180deg, #101735 0%, #0c132b 100%);
-  border-right: 1px solid rgba(90,122,220,.22);
-}
-[data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
-.side-brand {
-  display:flex; align-items:center; gap:12px; padding: 12px 10px 26px;
-  border-bottom:1px solid rgba(133,157,235,.16); margin-bottom:24px;
-}
-.side-logo {
-  display:flex; align-items:center; justify-content:center; width:42px; height:42px;
-  border-radius:13px; color:#fff; font-size:25px;
-  background:linear-gradient(140deg,#35c9e5,#7467ff);
-  box-shadow:0 8px 24px rgba(65,120,240,.28);
-}
-.side-title { color:#f4f6ff; font-weight:800; font-size:1.22rem; letter-spacing:-.04em; }
-.side-caption { color:#7889b2; font-size:.62rem; letter-spacing:.13em; margin-top:2px; }
-.side-section-label {
-  color:#64769f; font-size:.66rem; font-weight:800; letter-spacing:.15em;
-  padding:8px 12px; margin-top:5px;
-}
-.side-nav-item {
-  color:#9eaccd; padding:11px 13px; margin:4px 0; border-radius:10px;
-  font-size:.88rem; border:1px solid transparent;
-}
-.side-nav-item.active {
-  color:#fff; background:linear-gradient(100deg,rgba(69,112,238,.22),rgba(116,103,255,.12));
-  border-color:rgba(91,132,255,.42);
-  box-shadow:inset 3px 0 0 #6387ff;
-}
-.side-divider { height:1px; background:rgba(133,157,235,.14); margin:20px 8px; }
-.top-workspace {
-  color:#a9b8d9; font-size:.78rem; letter-spacing:.07em;
-  font-weight:700; padding:8px 0 18px;
-}
-.top-workspace span { color:#56688f; padding:0 7px; }
-.live-pill {
-  text-align:center; margin-top:4px; color:#68e2b0; font-size:.68rem;
-  letter-spacing:.08em; font-weight:800; border:1px solid rgba(68,211,158,.24);
-  background:rgba(31,170,125,.09); padding:7px 9px; border-radius:999px;
-}
-.zayan-hero {
-  padding:30px 34px; border-radius:19px;
-  background:linear-gradient(112deg,#172a55 0%,#171b48 57%,#102b48 100%);
-  border:1px solid rgba(76,119,236,.32);
-  box-shadow:0 18px 50px rgba(0,0,0,.22);
-}
-.zayan-hero:after {
-  width:320px; height:320px; right:-95px; top:-185px;
-  background:rgba(54,117,235,.19);
-}
-.hero-kicker {
-  color:#7ea8ff; font-size:.68rem; font-weight:800;
-  letter-spacing:.17em; margin-bottom:9px;
-}
-.zayan-brand { font-size:2rem; }
-.zayan-subtitle { max-width:780px; line-height:1.65; }
-.section-heading {
-  color:#eef2ff; font-size:1.15rem; font-weight:750;
-  margin:25px 0 13px; letter-spacing:-.025em;
-}
-.section-heading span {
-  color:#7182a8; font-size:.75rem; font-weight:400;
-  margin-left:10px; letter-spacing:0;
-}
-.feature-card {
-  min-height:158px; position:relative; padding:17px 17px 16px;
-  border-radius:15px; border:1px solid rgba(84,119,220,.27);
-  background:linear-gradient(145deg,rgba(24,35,75,.98),rgba(15,24,53,.98));
-  box-shadow:0 10px 28px rgba(0,0,0,.13);
-}
-.feature-icon {
-  display:flex; align-items:center; justify-content:center; width:36px; height:36px;
-  border-radius:11px; color:#c7d5ff; font-size:19px;
-  background:rgba(72,113,240,.18); border:1px solid rgba(111,145,255,.23);
-}
-.feature-tag {
-  position:absolute; right:14px; top:20px; color:#7189c5;
-  font-size:.57rem; font-weight:800; letter-spacing:.12em;
-}
-.feature-title { color:#f1f4ff; font-weight:700; margin-top:15px; font-size:.95rem; }
-.feature-desc { color:#91a1c4; font-size:.75rem; line-height:1.5; margin-top:5px; }
-
-.tools-heading { margin-top:30px; }
-
-/* Original cinematic holographic command-center home */
-.command-shell {
-  position:relative; overflow:hidden; padding:28px; margin:4px 0 22px;
-  border:1px solid rgba(63,190,255,.25); border-radius:24px;
-  background:
-    radial-gradient(circle at 50% 48%, rgba(0,183,255,.13), transparent 25%),
-    linear-gradient(125deg, rgba(10,22,48,.98), rgba(8,15,34,.98) 60%, rgba(8,35,55,.96));
-  box-shadow:0 22px 65px rgba(0,0,0,.34), inset 0 0 45px rgba(28,137,255,.05);
-}
-.command-shell:before {
-  content:""; position:absolute; inset:0; pointer-events:none; opacity:.16;
-  background-image:linear-gradient(rgba(83,164,255,.18) 1px, transparent 1px),
-                   linear-gradient(90deg, rgba(83,164,255,.18) 1px, transparent 1px);
-  background-size:34px 34px;
-  mask-image:linear-gradient(to bottom, black, transparent 88%);
-}
-.command-topline {
-  position:relative; display:flex; justify-content:space-between; align-items:center;
-  gap:12px; color:#86b9df; font-size:.68rem; font-weight:800; letter-spacing:.19em;
-}
-.command-topline .online {
-  color:#5df2c2; border:1px solid rgba(93,242,194,.3); background:rgba(20,180,140,.08);
-  border-radius:99px; padding:7px 12px; letter-spacing:.1em;
-}
-.command-grid {
-  position:relative; display:grid; grid-template-columns:1fr 1.05fr 1fr;
-  align-items:center; gap:18px; min-height:330px; padding:20px 0 12px;
-}
-.command-side {
-  border:1px solid rgba(72,160,235,.22); border-radius:15px; padding:17px;
-  background:linear-gradient(145deg,rgba(14,35,69,.78),rgba(8,20,43,.72));
-}
-.command-label { color:#5fa9e9; font-size:.63rem; font-weight:800; letter-spacing:.16em; }
-.command-value { color:#effaff; font-size:1.05rem; font-weight:700; margin-top:9px; }
-.command-note { color:#8ca8c7; font-size:.73rem; line-height:1.55; margin-top:5px; }
-.core-stage { display:flex; align-items:center; justify-content:center; min-height:285px; position:relative; }
-.ai-core {
-  width:210px; height:210px; border-radius:50%; position:relative; display:flex;
-  align-items:center; justify-content:center; isolation:isolate;
-  background:radial-gradient(circle,rgba(38,203,255,.22) 0 13%,rgba(23,103,205,.15) 31%,rgba(8,23,52,.1) 58%,transparent 70%);
-  filter:drop-shadow(0 0 22px rgba(38,190,255,.32));
-}
-.ai-core:before,.ai-core:after {
-  content:""; position:absolute; inset:8px; border-radius:50%;
-  border:1px solid rgba(77,211,255,.78); box-shadow:0 0 18px rgba(40,178,255,.22), inset 0 0 20px rgba(40,178,255,.12);
-  animation:core-spin 13s linear infinite;
-}
-.ai-core:after {
-  inset:25px; border:2px dashed rgba(96,144,255,.75);
-  animation:core-spin 18s linear infinite reverse;
-}
-.core-inner {
-  width:108px; height:108px; border-radius:50%; display:flex; flex-direction:column;
-  justify-content:center; align-items:center; z-index:2; color:#e8fbff;
-  background:radial-gradient(circle at 35% 25%,#54e8ff,#1472c7 48%,#101f56 78%);
-  border:2px solid rgba(158,238,255,.8);
-  box-shadow:0 0 24px rgba(39,194,255,.8),0 0 65px rgba(30,121,255,.35),inset 0 0 20px rgba(255,255,255,.2);
-  animation:core-pulse 2.8s ease-in-out infinite;
-}
-.core-inner b { font-size:1.55rem; letter-spacing:.08em; }
-.core-inner small { font-size:.48rem; letter-spacing:.18em; margin-top:3px; }
-.core-orbit {
-  position:absolute; width:245px; height:85px; border:1px solid rgba(59,196,255,.55);
-  border-radius:50%; transform:rotate(-28deg); box-shadow:0 0 13px rgba(36,172,255,.15);
-}
-.core-orbit.two { transform:rotate(62deg); width:235px; height:75px; border-color:rgba(105,130,255,.55); }
-.core-caption { position:absolute; bottom:1px; color:#7bbce7; font-size:.62rem; letter-spacing:.2em; font-weight:800; }
-@keyframes core-spin { to { transform:rotate(360deg); } }
-@keyframes core-pulse { 0%,100% { transform:scale(.96); } 50% { transform:scale(1.045); } }
-.hud-section-title { color:#edf7ff; font-weight:800; font-size:1rem; margin:22px 0 12px; }
-.hud-card {
-  min-height:135px; padding:17px; border-radius:16px; position:relative; overflow:hidden;
-  border:1px solid rgba(65,157,230,.25);
-  background:linear-gradient(145deg,rgba(17,37,72,.9),rgba(10,22,47,.94));
-}
-.hud-card:after {
-  content:""; position:absolute; width:110px; height:110px; right:-55px; bottom:-65px;
-  border-radius:50%; background:rgba(37,179,255,.13); filter:blur(4px);
-}
-.hud-card .icon { color:#66dfff; font-size:1.35rem; }
-.hud-card .name { color:#f1f7ff; font-weight:750; margin-top:10px; }
-.hud-card .desc { color:#8da8c8; font-size:.72rem; line-height:1.5; margin-top:4px; }
-.signal-row {
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  border-bottom:1px solid rgba(100,160,220,.12); padding:9px 0;
-  color:#a9c0dc; font-size:.77rem;
-}
-.signal-row:last-child { border-bottom:0; }
-.signal-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#42e5b5; margin-right:8px; box-shadow:0 0 9px #42e5b5; }
-.hud-footer { text-align:center; color:#526f94; font-size:.65rem; letter-spacing:.13em; padding:18px 0 2px; }
-@media (max-width: 850px) {
-  .command-grid { grid-template-columns:1fr; }
-  .core-stage { min-height:250px; order:-1; }
-  .command-shell { padding:18px; }
-}
-
-div[data-testid="stTabs"] button[role="tab"] {
-  background:rgba(18,29,65,.8); border-radius:10px 10px 0 0;
-  border-color:rgba(83,116,212,.2); color:#9eafd4;
-}
-div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-  background:linear-gradient(110deg,rgba(56,105,232,.27),rgba(105,91,232,.18));
-  border-color:rgba(91,132,255,.5); color:#fff;
-}
-/* Real clickable sidebar radio navigation */
-[data-testid="stSidebar"] [data-testid="stRadio"] > label { display:none; }
-[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] { gap:7px; }
-[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] label {
-  padding:10px 12px; border-radius:10px; border:1px solid transparent;
-  color:#9eaccd; background:transparent; transition:all .15s ease;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] label:hover {
-  background:rgba(69,112,238,.12); border-color:rgba(91,132,255,.25); color:#fff;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
-  background:linear-gradient(100deg,rgba(69,112,238,.22),rgba(116,103,255,.12));
-  border-color:rgba(91,132,255,.42); color:#fff;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
-  display:none;
-}
-@media (max-width: 900px) {
-  .feature-card { min-height:175px; }
-  .section-heading span { display:block; margin:4px 0 0; }
-}
-
+:root{--bg:#080e1d;--panel:#101b32;--panel2:#142443;--line:rgba(96,145,235,.22);--muted:#8fa4c7;--cyan:#47d7f2;--violet:#7768ff}
+html,body,[class*="css"]{font-family:Inter,'Hind Siliguri',sans-serif}
+.stApp{background:radial-gradient(ellipse at 12% 0%,rgba(103,88,255,.17),transparent 32%),radial-gradient(ellipse at 92% 12%,rgba(36,195,225,.12),transparent 28%),var(--bg);color:#edf4ff}
+[data-testid="stHeader"]{background:rgba(8,14,29,.72)}
+.block-container{max-width:1500px;padding-top:1.2rem;padding-bottom:3rem}
+#MainMenu,footer{visibility:hidden}
+[data-testid="stSidebar"]{background:linear-gradient(180deg,#101936,#0b1328);border-right:1px solid var(--line)}
+[data-testid="stSidebar"] .block-container{padding-top:1rem}
+.brand{display:flex;align-items:center;gap:12px;padding:12px 8px 24px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.brand-icon{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#36c9e8,#7667ff);display:grid;place-items:center;font-size:24px;box-shadow:0 0 24px #387ce755}
+.brand-name{font-weight:800;font-size:1.2rem;color:#fff}.brand-sub{font-size:.62rem;letter-spacing:.17em;color:#7992c3;margin-top:3px}
+.eyebrow{font-size:.66rem;letter-spacing:.18em;color:#72a9ff;font-weight:800}
+.hero{position:relative;overflow:hidden;padding:28px 32px;border:1px solid rgba(76,148,255,.32);border-radius:22px;background:linear-gradient(115deg,rgba(21,39,81,.97),rgba(12,29,53,.95) 60%,rgba(8,55,68,.88));box-shadow:0 18px 55px #0005;margin-bottom:22px}
+.hero:after{content:"";position:absolute;right:-75px;top:-160px;width:310px;height:310px;border-radius:50%;background:#3b80ff33;filter:blur(8px)}
+.hero h1{font-size:2rem;letter-spacing:-.04em;color:white;margin:.45rem 0}
+.hero p{color:#c0d2ed;margin:0;max-width:800px}
+.status{display:inline-block;border:1px solid #37dca755;background:#1a9b7020;color:#62e7b7;padding:6px 12px;border-radius:99px;font-size:.68rem;font-weight:800;letter-spacing:.12em}
+.core{display:flex;justify-content:center;align-items:center;min-height:220px}
+.core-ball{width:150px;height:150px;border-radius:50%;display:grid;place-items:center;text-align:center;background:radial-gradient(circle at 35% 25%,#78f0ff,#1678c8 48%,#111d53 78%);border:2px solid #a4f2ff;box-shadow:0 0 25px #27cfff,0 0 70px #1678c877;animation:pulse 3s ease-in-out infinite;color:white}
+.core-ball b{font-size:2rem;letter-spacing:.1em}.core-ball small{display:block;font-size:.55rem;letter-spacing:.18em}
+@keyframes pulse{50%{transform:scale(1.05);filter:brightness(1.15)}}
+.panel{padding:17px 18px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,rgba(20,36,68,.9),rgba(12,22,43,.95));height:100%}
+.panel-title{font-weight:750;color:#f2f6ff;margin-bottom:6px}.muted{color:var(--muted);font-size:.82rem}
+div[data-testid="stMetric"]{background:linear-gradient(145deg,#172849,#101a31);border:1px solid var(--line);border-radius:15px;padding:14px}
+div[data-testid="stMetricLabel"]{color:#a7bad9}div[data-testid="stMetricValue"]{color:#fff;font-weight:800}
+.stButton>button,.stDownloadButton>button{border:0;border-radius:10px;color:#fff;font-weight:700;background:linear-gradient(105deg,#7565f5,#397fe8);box-shadow:0 7px 20px #4f6ee833}
+.stButton>button:hover,.stDownloadButton>button:hover{color:#fff;filter:brightness(1.12);border:0}
+[data-testid="stChatMessage"]{background:#14213a;border:1px solid var(--line);border-radius:14px}
+[data-testid="stChatInput"]{border:1px solid #7668ff77;border-radius:13px;background:#111c33}
+[data-testid="stFileUploader"] section{border:1px dashed #7768ff88;border-radius:14px;background:#7768ff0b}
+hr{border-color:var(--line)}
+.smallcaps{font-size:.65rem;letter-spacing:.16em;color:#7594c7;font-weight:800}
+[data-testid="stSidebar"] [data-testid="stRadio"] label{padding:8px 10px;border-radius:9px}
+@media(max-width:800px){.hero{padding:22px}.hero h1{font-size:1.55rem}.core{min-height:170px}.core-ball{width:125px;height:125px}}
 </style>
 """, unsafe_allow_html=True)
 
+# ----------------------------- Storage -----------------------------
+def db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# Deny access until an app password is configured and verified.
-app_password = st.secrets.get("APP_PASSWORD", "")
-if not app_password:
-    st.error("App login is not configured. Set APP_PASSWORD in Streamlit Secrets.")
+def init_db():
+    with db() as c:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS memories(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL,
+            content TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS tasks(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+            due_date TEXT, priority TEXT DEFAULT 'Normal',
+            status TEXT DEFAULT 'Open', notes TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS team(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, member_name TEXT NOT NULL,
+            whatsapp TEXT, group_name TEXT, active INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS payments(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, member_name TEXT NOT NULL,
+            period TEXT, amount REAL NOT NULL, currency TEXT DEFAULT 'USD',
+            status TEXT DEFAULT 'Pending', reference TEXT, notes TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS chat_history(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL,
+            content TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        """)
+init_db()
+
+def query(sql, params=()):
+    with db() as c:
+        return c.execute(sql, params).fetchall()
+
+def execute(sql, params=()):
+    with db() as c:
+        cur = c.execute(sql, params)
+        c.commit()
+        return cur.lastrowid
+
+# ----------------------------- Configuration -----------------------------
+def get_secret(name, default=""):
+    try:
+        return st.secrets.get(name, os.getenv(name, default))
+    except Exception:
+        return os.getenv(name, default)
+
+APP_PASSWORD = str(get_secret("APP_PASSWORD", ""))
+API_KEY = str(get_secret("OPENAI_API_KEY", ""))
+client = OpenAI(api_key=API_KEY) if OpenAI and API_KEY else None
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Overview"
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+if "report_df" not in st.session_state:
+    st.session_state.report_df = None
+if "network_df" not in st.session_state:
+    st.session_state.network_df = None
+if "last_audio_hash" not in st.session_state:
+    st.session_state.last_audio_hash = None
+
+# ----------------------------- Authentication -----------------------------
+if not APP_PASSWORD:
+    st.error("Login is not configured. Add APP_PASSWORD in Streamlit → Manage app → Settings → Secrets.")
     st.stop()
 
-if not st.session_state.get("authenticated", False):
-    st.markdown("""
-    <div class="zayan-hero">
-      <div class="zayan-brand">🤖 Zayan AI</div>
-      <div class="zayan-subtitle">Your private workspace for AI assistance and affiliate business reporting.</div>
-      <span class="zayan-chip">SECURE LOGIN</span><span class="zayan-chip">BUSINESS ASSISTANT</span>
-    </div>
-    """, unsafe_allow_html=True)
-    st.subheader("🔐 Welcome back")
-    st.caption("Enter your dashboard password to continue.")
-    entered_password = st.text_input("Password", type="password")
-    if st.button("Log in"):
-        if hmac.compare_digest(entered_password, str(app_password)):
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Incorrect password")
+if not st.session_state.authenticated:
+    st.markdown('<div class="hero"><div class="eyebrow">PRIVATE AI BUSINESS WORKSPACE</div><h1>🤖 Zayan AI — JARVIS</h1><p>Your personal command center for conversations, affiliate reporting, team operations and payments.</p></div>', unsafe_allow_html=True)
+    a,b,c = st.columns([1,1.2,1])
+    with b:
+        with st.container(border=True):
+            st.subheader("🔐 Secure Login")
+            pw = st.text_input("Workspace password", type="password")
+            if st.button("Unlock Workspace", use_container_width=True):
+                if hmac.compare_digest(pw, APP_PASSWORD):
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password.")
     st.stop()
 
-def navigate_to(page):
-    # Callbacks run before widgets are instantiated on the next rerun,
-    # so updating the radio key here is safe in Streamlit.
-    st.session_state.active_page = page
-    st.session_state.sidebar_navigation = page
+# ----------------------------- Helpers -----------------------------
+SYSTEM_PROMPT = """You are Zayan AI, a private personal JARVIS-style assistant and affiliate marketing business copilot.
+Understand Bengali and English. Reply in the language the user uses; default to natural Bangla when they use Bangla.
+Be concise, practical and commercially aware. The user operates affiliate marketing campaigns, especially US credit-monitoring and identity-protection offers, uses Facebook Ads, manages a team, and needs help with affiliate reports, Sub IDs, payouts, payment reconciliation, tasks and professional English manager messages.
+Never claim to have sent an email, transferred money, accessed an external affiliate account, or changed a live campaign unless a connected tool actually did so.
+When analyzing uploaded report context, rely on the supplied data and clearly distinguish actual values from estimates.
+"""
 
-
-def submit_home_prompt():
-    prompt = st.session_state.get("home_quick_prompt", "").strip()
-    if prompt:
-        st.session_state.pending_prompt = prompt
-        navigate_to("AI Assistant")
-
-
-# Functional sidebar navigation.
-with st.sidebar:
-    st.markdown("""
-    <div class="side-brand">
-      <div class="side-logo">✦</div>
-      <div><div class="side-title">Zayan AI</div><div class="side-caption">BUSINESS WORKSPACE</div></div>
-    </div>
-    <div class="side-section-label">WORKSPACE NAVIGATION</div>
-    """, unsafe_allow_html=True)
-    nav_options = ["Overview", "AI Assistant", "Voice Assistant", "Business Reports", "Payments", "Settings"]
-    current_page = st.session_state.get("active_page", "Overview")
-    if current_page not in nav_options:
-        current_page = "Overview"
-    active_page = st.radio(
-        "Navigate",
-        nav_options,
-        index=nav_options.index(current_page),
-        label_visibility="collapsed",
-        key="sidebar_navigation",
-        format_func=lambda item: {
-            "Overview": "▦  Overview",
-            "AI Assistant": "✧  AI Assistant",
-            "Voice Assistant": "◉  Voice Assistant",
-            "Business Reports": "▤  Business Reports",
-            "Payments": "▣  Payments",
-            "Settings": "⚙  Settings",
-        }[item],
-    )
-    st.session_state.active_page = active_page
-    st.markdown('<div class="side-divider"></div>', unsafe_allow_html=True)
-    st.caption("Private workspace · Secure session")
-active_page = st.session_state.get("active_page", "Overview")
-
-if active_page == "Overview":
-    st.markdown("""
-    <div class="command-shell">
-      <div class="command-topline">
-        <span>ZAYAN AI &nbsp; / &nbsp; PERSONAL COMMAND CENTER</span>
-        <span class="online">● SYSTEM ONLINE</span>
-      </div>
-      <div class="command-grid">
-        <div class="command-side">
-          <div class="command-label">IDENTITY</div>
-          <div class="command-value">ZAYAN AI</div>
-          <div class="command-note">Your personal business intelligence assistant. Ready to help with planning, reporting and decisions.</div>
-          <div style="height:17px"></div>
-          <div class="command-label">INTERFACE MODE</div>
-          <div class="command-value">Holographic Workspace</div>
-          <div class="command-note">Bengali + English interaction</div>
-        </div>
-        <div class="core-stage">
-          <div class="core-orbit"></div><div class="core-orbit two"></div>
-          <div class="ai-core"><div class="core-inner"><b>ZA</b><small>AI CORE</small></div></div>
-          <div class="core-caption">VOICE • THINK • ASSIST</div>
-        </div>
-        <div class="command-side">
-          <div class="command-label">SYSTEM STATUS</div>
-          <div class="signal-row"><span><i class="signal-dot"></i>Workspace</span><b>Active</b></div>
-          <div class="signal-row"><span><i class="signal-dot"></i>Navigation</span><b>Ready</b></div>
-          <div class="signal-row"><span><i class="signal-dot"></i>Reports module</span><b>Available</b></div>
-          <div class="signal-row"><span><i class="signal-dot"></i>Voice module</span><b>Available</b></div>
-          <div class="command-note" style="margin-top:12px">AI responses and voice features require a valid API connection.</div>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="hud-section-title">COMMAND DECK &nbsp; <span style="color:#6f8db4;font-size:.72rem;font-weight:400">Select a module to launch</span></div>', unsafe_allow_html=True)
-    launch_cols = st.columns(4, gap="medium")
-    launch_items = [
-        ("✦", "AI Assistant", "Ask questions, plan campaigns and get business support.", "OPEN CHAT"),
-        ("◉", "Voice Assistant", "Talk naturally in Bengali or English.", "VOICE LINK"),
-        ("▤", "Business Reports", "Analyze affiliate reports, leads and Sub IDs.", "ANALYTICS"),
-        ("▣", "Payments", "Review payment sheets and compare reports.", "FINANCE"),
-    ]
-    for col, (symbol, title, desc, tag) in zip(launch_cols, launch_items):
-        with col:
-            st.markdown(f"""
-            <div class="hud-card">
-              <div class="feature-tag">{tag}</div>
-              <div class="icon">{symbol}</div>
-              <div class="name">{title}</div>
-              <div class="desc">{desc}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            st.button(
-                f"Launch {title}",
-                key=f"launch_{title}",
-                use_container_width=True,
-                on_click=navigate_to,
-                args=(title,),
-            )
-
-    st.markdown('<div class="hud-section-title">QUICK COMMAND &nbsp; <span style="color:#6f8db4;font-size:.72rem;font-weight:400">Send a request directly to Zayan AI</span></div>', unsafe_allow_html=True)
-    st.chat_input(
-        "E.g. Analyze my affiliate performance this week...",
-        key="home_quick_prompt",
-        on_submit=submit_home_prompt,
-    )
-
-    st.markdown("""
-    <div class="command-side" style="margin-top:20px">
-      <div class="command-label">MISSION CONTROL</div>
-      <div class="command-value">One workspace. Your business in focus.</div>
-      <div class="command-note">Use the command deck or left navigation to open each tool. Your existing chat, reporting and payment modules remain available.</div>
-    </div>
-    <div class="hud-footer">ZAYAN AI &nbsp; • &nbsp; PERSONAL BUSINESS WORKSPACE &nbsp; • &nbsp; SECURE SESSION</div>
-    """, unsafe_allow_html=True)
-
-# Keep a compact top strip on all internal pages except the cinematic home.
-else:
-    top_left, top_right = st.columns([5, 1])
-    with top_left:
-        st.markdown('<div class="top-workspace">ZAYAN AI <span> / </span> Personal Business Workspace</div>', unsafe_allow_html=True)
-    with top_right:
-        st.markdown('<div class="live-pill">● &nbsp; WORKSPACE</div>', unsafe_allow_html=True)
-
-# Read the API key from Streamlit Cloud Secrets first, then local environment.
-try:
-    openai_api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-except Exception:
-    openai_api_key = os.getenv("OPENAI_API_KEY", "")
-
-client = OpenAI(api_key=openai_api_key) if OpenAI and openai_api_key else None
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "processed_audio" not in st.session_state:
-    st.session_state.processed_audio = None
-if "team_report_text" not in st.session_state:
-    st.session_state.team_report_text = ""
-if "team_report_rows" not in st.session_state:
-    st.session_state.team_report_rows = None
-
-
-def normalized_name(value):
-    return re.sub(r"[^a-z0-9]", "", str(value).lower())
-
-
-def clean_subid(value):
-    if pd.isna(value):
-        return ""
-    return str(value).strip().strip("'\"").strip().casefold()
-
-
-def clean_number_value(value):
-    text = str(value).strip().replace(",", "").replace("$", "").replace("USD", "")
-    if text.startswith("(") and text.endswith(")"):
-        text = "-" + text[1:-1]
-    match = re.search(r"-?\d+(?:\.\d+)?", text)
-    return float(match.group(0)) if match else 0.0
-
-
-def clean_number(series):
-    return pd.to_numeric(
-        series.astype(str)
-        .str.replace(",", "", regex=False)
-        .str.replace("$", "", regex=False)
-        .str.replace("%", "", regex=False)
-        .str.replace(r"^\((.*)\)$", r"-\1", regex=True),
-        errors="coerce",
-    ).fillna(0)
-
-
-def find_col(columns, aliases):
-    for column in columns:
-        if normalized_name(column) in aliases:
-            return column
-    return None
-
-
-def read_report(upload):
-    upload.seek(0)
-    if upload.name.lower().endswith(".csv"):
-        try:
-            frame = pd.read_csv(upload, dtype=str, encoding="utf-8-sig")
-        except UnicodeDecodeError:
-            upload.seek(0)
-            frame = pd.read_csv(upload, dtype=str, encoding="cp1252")
+def ask_ai(prompt, speak=False):
+    st.session_state.chat_messages.append({"role":"user","content":prompt})
+    if client is None:
+        answer = "OpenAI API সংযোগ পাওয়া যাচ্ছে না। Streamlit Secrets-এ OPENAI_API_KEY ঠিকভাবে যোগ করা আছে কি না দেখুন।"
     else:
-        frame = pd.read_excel(upload, dtype=str)
-    frame.columns = frame.columns.astype(str).str.strip()
-    return frame
+        try:
+            memory_rows = query("SELECT category,content FROM memories ORDER BY id DESC LIMIT 20")
+            memory_text = "\n".join([f"- {r['category']}: {r['content']}" for r in memory_rows])
+            report_context = ""
+            if st.session_state.report_df is not None:
+                df = st.session_state.report_df
+                report_context = f"\nCurrent uploaded report summary: {len(df)} rows; columns={list(df.columns)}."
+            history = [{"role":"system","content":SYSTEM_PROMPT + "\nSaved memory:\n" + memory_text + report_context}]
+            history += [{"role":m["role"],"content":m["content"]} for m in st.session_state.chat_messages[-16:]]
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=history, temperature=0.5)
+            answer = response.choices[0].message.content or "দুঃখিত, উত্তর তৈরি করা যায়নি।"
+        except Exception as e:
+            answer = f"AI connection error: {e}"
+    st.session_state.chat_messages.append({"role":"assistant","content":answer})
+    execute("INSERT INTO chat_history(role,content,created_at) VALUES(?,?,?)",("user",prompt,datetime.now().isoformat(timespec="seconds")))
+    execute("INSERT INTO chat_history(role,content,created_at) VALUES(?,?,?)",("assistant",answer,datetime.now().isoformat(timespec="seconds")))
+    if speak and client is not None:
+        try:
+            audio = client.audio.speech.create(model="gpt-4o-mini-tts", voice="alloy", input=answer)
+            st.session_state.last_tts = audio.read()
+        except Exception as e:
+            st.session_state.tts_error = str(e)
+    return answer
 
+def norm(s):
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
 
-METRICS = {
-    "Clicks": {"click", "clicks"},
-    "Leads": {"lead", "leads", "conversion", "conversions"},
-    "Sales": {"sale", "sales", "order", "orders"},
-    "Earnings": {"earning", "earnings", "revenue", "commission", "commissions", "payout", "dollar", "dollars"},
+def clean_subid(v):
+    if pd.isna(v): return ""
+    return str(v).strip().strip("'\"").casefold()
+
+def clean_num(series):
+    s = series.astype(str).str.replace(",","",regex=False).str.replace("$","",regex=False).str.replace("%","",regex=False)
+    s = s.str.replace(r"^\((.*)\)$",r"-\1",regex=True)
+    return pd.to_numeric(s,errors="coerce").fillna(0.0)
+
+ALIASES = {
+    "Clicks":{"click","clicks","unique_clicks"},
+    "Leads":{"lead","leads","conversion","conversions","approved_leads"},
+    "Sales":{"sale","sales","orders","order"},
+    "Earnings":{"earning","earnings","revenue","commission","commissions","payout","amount","total_earnings"}
 }
 
-
-def ask_zayan(prompt):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    try:
-        if client is None:
-            raise ValueError("OPENAI_API_KEY not found in .env or OpenAI package is not installed.")
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are Zayan AI, a professional personal and affiliate marketing business assistant. "
-                        "Understand Bengali and English. Reply in the user's language."
-                    ),
-                }
-            ] + st.session_state.messages,
-        )
-        answer = response.choices[0].message.content or "No response."
-    except Exception as exc:
-        answer = f"AI error: {exc}"
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-
-
-def extract_upload_text(upload):
-    name = upload.name.lower()
-    data = upload.getvalue()
-    if name.endswith(".txt"):
-        return data.decode("utf-8", errors="replace")
-    if name.endswith(".pdf"):
-        if fitz is None:
-            raise RuntimeError("PDF support is missing. In PowerShell run: python -m pip install pymupdf")
-        doc = fitz.open(stream=data, filetype="pdf")
-        text = "\n".join(page.get_text("text") for page in doc).strip()
-        if text:
-            return text
-        # Scanned/image-only PDF: OCR through OpenAI vision is needed.
-        if client is None:
-            raise RuntimeError("This PDF appears to be scanned. Add OPENAI_API_KEY to .env to extract text from scanned PDFs, or upload a screenshot.")
-        return extract_image_with_openai(data, "application/pdf")
-    if name.endswith((".png", ".jpg", ".jpeg", ".webp")):
-        if client is None:
-            raise RuntimeError("Screenshot OCR needs OPENAI_API_KEY in .env.")
-        mime = "image/png" if name.endswith(".png") else ("image/webp" if name.endswith(".webp") else "image/jpeg")
-        return extract_image_with_openai(data, mime)
-    return data.decode("utf-8", errors="replace")
-
-
-def extract_image_with_openai(data, mime):
-    import base64
-    encoded = base64.b64encode(data).decode("ascii")
-    if mime == "application/pdf":
-        raise RuntimeError("This PDF is image-only. Please upload a screenshot of the report page, or use a text-based PDF.")
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Read the report image exactly. Return plain text rows only, preserving each Sub ID, lead count, "
-                    "and dollar amount. Do not invent unreadable values; mark them [UNCLEAR]."
-                ),
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Extract the report rows and totals from this screenshot."},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
-                ],
-            },
-        ],
-    )
-    return response.choices[0].message.content or ""
-
-
-def parse_team_text(text):
-    rows = []
-    errors = []
-    # Expected examples: SubID = 2 = 90; SubID 2 90; SubID | 2 | $90
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or set(line) <= {"=", "-", "_", " "}:
-            continue
-        if re.search(r"\b(all\s*dollar|total|grand total)\b", line, re.I):
-            continue
-        # Split on equals, pipe, tabs, or 2+ spaces; also support "SubID, 2, 90"
-        parts = [p.strip().strip("'\"") for p in re.split(r"\s*=\s*|\s*\|\s*|\t+|,\s*", line) if p.strip()]
-        if len(parts) < 3:
-            parts = re.split(r"\s{2,}", line)
-        if len(parts) >= 3:
-            subid = parts[0].strip().strip("'\"")
-            lead_candidates = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", parts[1])
-            dollar_candidates = re.findall(r"-?\$?\s*\d[\d,]*(?:\.\d+)?", " ".join(parts[2:]))
-            if subid and lead_candidates and dollar_candidates:
-                rows.append({
-                    "Sub ID": subid,
-                    "Team Leads": clean_number_value(lead_candidates[0]),
-                    "Team Earnings": clean_number_value(dollar_candidates[-1]),
-                    "Source Line": line_no,
-                })
-                continue
-        # Avoid flagging headings, totals, and common labels as malformed rows.
-        if re.search(r"\d", line) and not re.search(r"\b(total|dollar|lead|sub\s*id|report)\b", line, re.I):
-            errors.append(f"Line {line_no}: {line}")
-    return pd.DataFrame(rows), errors
-
-
-def find_subid_column(columns):
-    exact = {"subid", "subid1", "subid2", "subid3", "subid4", "subid5", "subid6", "subid7", "subid8", "subid9", "subid10"}
-    for col in columns:
-        n = normalized_name(col)
-        if n in exact or n.startswith("subid") or n in {"affiliateid", "trackingid", "partnerid"}:
+def find_column(cols, aliases):
+    for col in cols:
+        if norm(col) in {norm(x) for x in aliases}:
             return col
     return None
 
+def load_report(upload):
+    name = upload.name.lower()
+    upload.seek(0)
+    if name.endswith(".csv"):
+        try: df = pd.read_csv(upload,dtype=str,encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            upload.seek(0); df = pd.read_csv(upload,dtype=str,encoding="cp1252")
+    elif name.endswith((".xlsx",".xls")):
+        df = pd.read_excel(upload,dtype=str)
+    elif name.endswith(".pdf"):
+        if fitz is None: raise ValueError("PDF support missing. Add pymupdf to requirements.")
+        doc = fitz.open(stream=upload.getvalue(),filetype="pdf")
+        text = "\n".join(p.get_text() for p in doc)
+        rows=[]
+        for line in text.splitlines():
+            parts=re.split(r"\s{2,}|\t+",line.strip())
+            if len(parts)>=2 and re.search(r"[A-Za-z]",parts[0]):
+                nums=re.findall(r"\$?-?[\d,]+(?:\.\d+)?", " ".join(parts[1:]))
+                if nums:
+                    vals=[float(x.replace("$","").replace(",","")) for x in nums]
+                    rows.append({"Sub ID":parts[0],"Clicks":vals[0] if len(vals)>=3 else 0,
+                                 "Leads":vals[1] if len(vals)>=3 else vals[0],
+                                 "Earnings":vals[-1]})
+        if not rows: raise ValueError("PDF text could not be parsed into Sub ID rows. Please use CSV/XLSX export.")
+        df=pd.DataFrame(rows)
+    else: raise ValueError("Use CSV, XLSX, XLS or PDF.")
+    df.columns=df.columns.astype(str).str.strip()
+    subcol=find_column(df.columns,{"subid","sub_id","sub id","sub id 1","subid1","tracking_sub_id"})
+    if subcol is None:
+        subcol=next((c for c in df.columns if norm(c).startswith("subid")),None)
+    if subcol is None: raise ValueError("Sub ID column not found. Expected a column such as Sub ID or SubID 1.")
+    out=pd.DataFrame()
+    out["Sub ID"]=df[subcol].apply(clean_subid)
+    out=out[out["Sub ID"].ne("") & ~out["Sub ID"].str.lower().isin(["total","totals"])].copy()
+    for metric, aliases in ALIASES.items():
+        col=find_column(df.columns,aliases)
+        out[metric]=clean_num(df[col]) if col is not None else 0.0
+    return out.groupby("Sub ID",as_index=False)[["Clicks","Leads","Sales","Earnings"]].sum()
 
-def normalize_maxbounty(upload):
-    df = read_report(upload)
-    sub_col = find_subid_column(df.columns)
-    if sub_col is None:
-        raise ValueError("Could not find a Sub ID column in this CSV. Please check the CSV header.")
-    out = pd.DataFrame()
-    out["Sub ID"] = df[sub_col].apply(clean_subid)
-    out = out[out["Sub ID"] != ""].copy()
-    for label, aliases in METRICS.items():
-        col = find_col(df.columns, aliases)
-        out[label] = clean_number(df[col]) if col is not None else 0.0
-    # Combine repeated rows for the same Sub ID.
-    agg = {metric: "sum" for metric in METRICS}
-    return out.groupby("Sub ID", as_index=False).agg(agg)
+def currency(v):
+    return f"${v:,.2f}"
 
+# ----------------------------- Sidebar -----------------------------
+with st.sidebar:
+    st.markdown('<div class="brand"><div class="brand-icon">✦</div><div><div class="brand-name">Zayan AI</div><div class="brand-sub">JARVIS BUSINESS OS</div></div></div>',unsafe_allow_html=True)
+    st.markdown('<div class="smallcaps">COMMAND NAVIGATION</div>',unsafe_allow_html=True)
+    pages=["Overview","AI Assistant","Voice Assistant","Business Reports","Payments","Team Management","Tasks","Memory","Email Assistant","Settings"]
+    icons=["▦","✧","◉","▤","▣","♙","✓","◈","✉","⚙"]
+    labels={p:f"{icons[i]}  {p}" for i,p in enumerate(pages)}
+    selected=st.radio("Navigation",pages,index=pages.index(st.session_state.active_page),format_func=lambda p:labels[p],label_visibility="collapsed",key="nav_radio")
+    st.session_state.active_page=selected
+    st.divider()
+    st.caption("PRIVATE WORKSPACE · SECURE SESSION")
+    st.caption("Build: JARVIS Hybrid v1")
 
+page=st.session_state.active_page
 
-def read_business_pdf(upload):
-    """Parse text PDF tables; image-only pages use vision if API key is configured."""
-    import io
-    if fitz is None:
-        raise RuntimeError("Install PDF support: python -m pip install pymupdf")
-    doc = fitz.open(stream=upload.getvalue(), filetype="pdf")
-    rows = []
-    for page in doc:
-        lines = page.get_text("text", sort=True).splitlines()
-        # PDF exports sometimes split every cell onto a separate line.
-        text = "\n".join(lines)
-        if len(text.strip()) < 80:
-            if client is None:
-                raise RuntimeError("Scanned PDF: add OPENAI_API_KEY to .env for image-based reports.")
-            import base64
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            b64 = base64.b64encode(pix.tobytes("png")).decode()
-            response = client.chat.completions.create(
-                model="gpt-4o-mini", temperature=0,
-                messages=[{"role":"user","content":[
-                    {"type":"text","text":"Transcribe ONLY report table data rows as TSV: Sub ID<TAB>Clicks<TAB>Leads/Conversions<TAB>Earnings. Use blank for absent fields. No headers, totals, prose or markdown."},
-                    {"type":"image_url","image_url":{"url":"data:image/png;base64,"+b64}}
-                ]}])
-            text = response.choices[0].message.content or ""
-            lines = text.splitlines()
-        # First try table layout from PDF (including CheckPeopleOnline)
-        for line in lines:
-            line=line.strip()
-            if not line or re.search(r'^(sub\s*id|total|offer:|date:|exported|page\s)',line,re.I):
-                continue
-            parts=re.split(r'\t+|\s{2,}',line)
-            if len(parts)<3:
-                # TransUnion: SD_TU_santo20 8 360$ ; MaxBounty: IQ_748 16 2 12.50 0.00 86.00 5.38
-                parts=line.split()
-            if len(parts)<3: continue
-            sid=parts[0].strip()
-            if not re.search(r'[A-Za-z]',sid) or sid.lower() in ('sub','totals','total'): continue
-            nums=[x for x in parts[1:] if re.fullmatch(r'\$?-?[\d,]+(?:\.\d+)?\$?',x)]
-            if len(nums)<2: continue
-            def n(x): return float(x.strip('$').replace(',',''))
-            if len(nums)>=6: # MaxBounty columns: clicks, leads, CR, sales, earnings, EPC
-                clicks,leads,earnings=n(nums[0]),n(nums[1]),n(nums[4])
-            elif len(nums)>=3 and any('converted' in x.lower() for x in parts):
-                clicks,leads,earnings=n(nums[0]),n(nums[1]),n(nums[2])
-            elif len(nums)==3: # image OCR: clicks, leads, earnings
-                clicks,leads,earnings=map(n,nums)
-            else: # TransUnion: leads, earnings
-                clicks,leads,earnings=None,n(nums[0]),n(nums[-1])
-            rows.append({"Sub ID":sid,"Clicks":clicks,"Leads":leads,"Sales":None,"Earnings":earnings})
-    if not rows:
-        raise ValueError("No report rows recognized. Please use a clearer PDF or CSV export.")
-    return pd.DataFrame(rows)
+# ----------------------------- Overview -----------------------------
+if page=="Overview":
+    left,mid,right=st.columns([1.1,1,1.1],gap="large")
+    with st.container():
+        st.markdown('<div class="hero"><div class="eyebrow">ZAYAN AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome back, Commander.</h1><p>Your business intelligence, affiliate operations and personal AI assistant — in one workspace.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
+    with left:
+        st.markdown('<div class="panel"><div class="smallcaps">IDENTITY</div><div class="panel-title">ZAYAN AI</div><div class="muted">Personal JARVIS Business Copilot</div><br><div class="smallcaps">INTERFACE MODE</div><div class="panel-title">Hybrid Command Center</div><div class="muted">Bengali + English · Desktop + Mobile</div></div>',unsafe_allow_html=True)
+    with mid:
+        st.markdown('<div class="core"><div class="core-ball"><div><b>ZA</b><small>AI CORE · ONLINE</small></div></div></div>',unsafe_allow_html=True)
+    with right:
+        st.markdown('<div class="panel"><div class="smallcaps">SYSTEM STATUS</div><p>🟢 Workspace · Active</p><p>🟢 Navigation · Ready</p><p>🟢 Database · Connected</p><p>'+("🟢 OpenAI · Connected" if client else "🟠 OpenAI · API key missing")+'</p><p class="muted">Voice playback uses OpenAI TTS when enabled.</p></div>',unsafe_allow_html=True)
+    st.subheader("Command Deck")
+    cards=[("✧","AI Assistant","Ask questions and plan business activity."),("◉","Voice Assistant","Speak in Bangla or English; hear spoken replies."),("▤","Business Reports","Upload affiliate reports and search Sub IDs."),("▣","Payments","Reconcile team reports and track manual payments.")]
+    cols=st.columns(4)
+    for col,(ico,title,desc) in zip(cols,cards):
+        with col:
+            st.markdown(f'<div class="panel"><div style="font-size:1.5rem;color:#5cdff7">{ico}</div><div class="panel-title">{title}</div><div class="muted">{desc}</div></div>',unsafe_allow_html=True)
+            if st.button(f"Open {title}",key="go_"+title,use_container_width=True):
+                st.session_state.active_page=title; st.rerun()
+    st.subheader("Quick Command")
+    with st.form("quick_command"):
+        quick=st.text_input("Tell Zayan what you need",placeholder="যেমন: এই সপ্তাহের affiliate performance বিশ্লেষণ করো")
+        submitted=st.form_submit_button("Run command")
+    if submitted and quick:
+        st.session_state.quick_result=ask_ai(quick)
+        st.session_state.active_page="AI Assistant"; st.rerun()
+    st.caption("Note: Reports, memory, team and payment records are stored in the app database. Streamlit Cloud's local disk may reset on rebuild; connect durable external storage for long-term records.")
 
-active_page = st.session_state.get("active_page", "Overview")
-
-if active_page == "Overview":
-    pass
-
-elif active_page == "AI Assistant":
-    st.subheader("Chat with Zayan AI")
-    st.caption("Type your message or use the microphone to speak in Bengali or English.")
-
-    pending_prompt = st.session_state.pop("pending_prompt", None)
-    if pending_prompt:
-        ask_zayan(pending_prompt)
-        st.rerun()
-
-    # Voice input directly inside the main AI chat page.
-    mic_col, send_col = st.columns([4, 1], vertical_alignment="bottom")
-    with mic_col:
-        chat_audio = st.audio_input("🎙️ Speak to Zayan AI", key="chat_voice_input")
-    with send_col:
-        send_voice = st.button("Send voice", type="primary", use_container_width=True, key="send_chat_voice")
-
-    if send_voice:
-        if chat_audio is None:
-            st.warning("Please record a voice message first.")
-        elif client is None:
-            st.error("OPENAI_API_KEY is missing. Add it to Streamlit Secrets.")
-        else:
-            temp_path = None
-            try:
-                audio_bytes = chat_audio.getvalue()
-                if audio_bytes == st.session_state.get("chat_voice_processed_audio"):
-                    st.info("This voice message was already sent.")
-                else:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-                        temp_file.write(audio_bytes)
-                        temp_path = temp_file.name
-                    with open(temp_path, "rb") as audio_file:
-                        transcription = client.audio.transcriptions.create(
-                            model="whisper-1",
-                            file=audio_file,
-                        )
-                    spoken_text = (transcription.text or "").strip()
-                    if not spoken_text:
-                        st.warning("I couldn't hear clear speech. Please try recording again.")
-                    else:
-                        st.session_state.chat_voice_processed_audio = audio_bytes
-                        st.markdown("**You said:** " + spoken_text)
-                        ask_zayan(spoken_text)
-                        st.rerun()
-            except Exception as exc:
-                st.error(f"Voice input error: {exc}")
-            finally:
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
-
-    prompt = st.chat_input("Or type a message to Zayan AI...")
+# ----------------------------- AI Chat -----------------------------
+elif page=="AI Assistant":
+    st.markdown('<div class="eyebrow">PERSONAL INTELLIGENCE</div>',unsafe_allow_html=True)
+    st.title("✧ Chat with Zayan AI")
+    st.caption("Bangla or English — ask about your business, campaigns, reports, planning or daily work.")
+    for m in st.session_state.chat_messages:
+        with st.chat_message(m["role"]): st.markdown(m["content"])
+    if "quick_result" in st.session_state:
+        st.success(st.session_state.pop("quick_result"))
+    prompt=st.chat_input("Ask Zayan AI anything...")
     if prompt:
-        ask_zayan(prompt)
+        with st.spinner("Zayan is thinking..."):
+            ans=ask_ai(prompt)
         st.rerun()
+    if st.session_state.chat_messages and st.session_state.chat_messages[-1]["role"]=="assistant":
+        if st.button("🔊 Read latest answer aloud"):
+            if client:
+                try:
+                    speech=client.audio.speech.create(model="gpt-4o-mini-tts",voice="alloy",input=st.session_state.chat_messages[-1]["content"])
+                    st.audio(speech.read(),format="audio/mp3")
+                except Exception as e: st.error(f"Text-to-speech error: {e}")
+            else: st.warning("Add OPENAI_API_KEY to enable spoken replies.")
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-
-elif active_page == "Voice Assistant":
-    st.subheader("🎤 Talk to Zayan AI")
-    st.caption("Voice transcription requires OPENAI_API_KEY in your .env file.")
-    audio = st.audio_input("Speak in Bengali or English")
-    if audio is not None and st.button("Send Voice Message"):
-        if client is None:
-            st.error("OPENAI_API_KEY not found in .env or OpenAI package is not installed.")
-        else:
-            temp_path = None
-            try:
-                audio_bytes = audio.getvalue()
-                if audio_bytes != st.session_state.processed_audio:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-                        temp_file.write(audio_bytes)
-                        temp_path = temp_file.name
-                    with open(temp_path, "rb") as audio_file:
-                        transcription = client.audio.transcriptions.create(model="whisper-1", file=audio_file)
-                    st.session_state.processed_audio = audio_bytes
-                    st.write("You said:", transcription.text)
-                    ask_zayan(transcription.text)
-            except Exception as exc:
-                st.error(f"Voice error: {exc}")
-            finally:
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
-        st.success(st.session_state.messages[-1]["content"])
-
-elif active_page == "Business Reports":
-    st.subheader("📊 Affiliate Business Analytics")
-    upload_col, search_col = st.columns(2, gap="large")
-    with upload_col:
-        uploaded_file = st.file_uploader("Upload CSV, Excel or PDF report", type=["csv","xlsx","pdf"], key="business_csv")
-    with search_col:
-        search_text = st.text_area("🔎 Search Sub IDs (one per line or comma-separated)", height=145,
-                                   placeholder="SD_TU_santo\\nonline\\nIQ_748")
-        st.caption("Match Sub IDs — automatically matches the entered text anywhere in a Sub ID (case-insensitive).")
-        search_clicked = st.button("🔍 Search & Calculate", type="primary")
-    if uploaded_file is None:
-        st.info("Upload a CSV, Excel or PDF report.")
-    else:
-        try:
-            is_pdf = uploaded_file.name.lower().endswith(".pdf")
-            df = read_business_pdf(uploaded_file) if is_pdf else read_report(uploaded_file)
-            subid_col = find_subid_column(df.columns)
-            if subid_col is None:
-                st.error("Sub ID column not found.")
-            else:
-                report_df = df.copy()
-                report_df["_sid"] = report_df[subid_col].apply(clean_subid)
-                report_df = report_df[~report_df["_sid"].isin(["total","totals",""])].copy()
-                for label, aliases in METRICS.items():
-                    source = find_col(report_df.columns, aliases)
-                    report_df[label] = clean_number(report_df[source]) if source is not None else float("nan")
-                st.success(f"Report loaded: {len(report_df)} rows")
-                if is_pdf:
-                    st.caption("PDF extraction is best-effort. Check the extracted rows against the original before using totals for payments.")
-                    with st.expander("Review extracted PDF rows"):
-                        st.dataframe(report_df.drop(columns=["_sid"]),use_container_width=True)
-                if search_clicked:
-                    requested = list(dict.fromkeys(clean_subid(x) for x in re.split(r"[,;\n]+", search_text) if x.strip()))
-                    if not requested: st.warning("Enter at least one Sub ID.")
-                    else:
-                        def matched(sid):
-                            return any(q in sid for q in requested)
-                        selected=report_df[report_df["_sid"].apply(matched)].copy()
-                        # Only report Sub IDs with positive conversions/leads.
-                        # Do not use Sales dollar amounts as conversion counts.
-                        selected=selected[pd.to_numeric(selected["Leads"], errors="coerce").fillna(0) > 0].copy()
-                        if selected.empty: st.warning("No matching Sub IDs with positive conversions/leads found.")
-                        else:
-                            selected["Sub ID"]=selected["_sid"]
-                            selected=selected.groupby("Sub ID",as_index=False)[list(METRICS)].sum(min_count=1)
-                            selected=selected[selected["Leads"] > 0].copy()
-                            # In this report Leads are conversions; Sales is a separate, zero-valued field.
-                            selected=selected.rename(columns={"Leads": "Conversions"})
-                            display_columns=["Sub ID","Clicks","Conversions","Earnings"]
-                            selected=selected[display_columns]
-                            st.markdown("### 🔎 Selected Sub ID Results")
-                            st.dataframe(selected,use_container_width=True,hide_index=True)
-                            st.markdown("### Combined Totals")
-                            cols=st.columns(3)
-                            for col,label in zip(cols,["Clicks","Conversions","Earnings"]):
-                                value=selected[label].sum(min_count=1)
-                                col.metric(label, "Not in report" if pd.isna(value) else
-                                           f"${value:,.2f}" if label=="Earnings" else f"{value:,.0f}")
-                            st.download_button("Download selected report CSV",selected.to_csv(index=False).encode("utf-8-sig"),
-                                               "zayan_subid_results.csv","text/csv")
-                            # Excel is optional: a missing openpyxl package must not break search or CSV download.
-                            try:
-                                import openpyxl
-                                excel_buffer = BytesIO()
-                                selected.to_excel(excel_buffer, index=False, engine="openpyxl")
-                                st.download_button("Download selected report Excel", excel_buffer.getvalue(),
-                                                   "zayan_subid_results.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                            except ImportError:
-                                st.info("Excel download requires openpyxl. Install it with: pip install openpyxl. CSV download works without it.")
-        except Exception as exc:
-            st.error(f"Could not read report: {exc}")
-
-elif active_page == "Payments":
-    st.subheader("💰 Payments Verification")
-    st.write("Compare a team report (text, screenshot, or PDF) with a MaxBounty CSV. The report period must match the CSV period.")
-    mode = st.radio("Team report input method", ["Copy & Paste Text", "Screenshot Upload", "PDF Upload"], horizontal=True, key="payment_mode")
-
-    team_text = ""
-    if mode == "Copy & Paste Text":
-        team_text = st.text_area(
-            "Paste the team's WhatsApp report",
-            height=220,
-            placeholder="Example:\n=ARY=BR_01 = 2 = 90\n=ARY=Jacks1 = 2 = 48.75\nAll dollar : 138.75",
-            key="team_text_input",
-        )
-    elif mode == "Screenshot Upload":
-        screenshot = st.file_uploader("Upload screenshot (PNG/JPG/WEBP)", type=["png", "jpg", "jpeg", "webp"], key="team_screenshot")
-        if screenshot is not None and st.button("Extract Report Text", key="extract_image"):
-            try:
-                team_text = extract_upload_text(screenshot)
-                st.session_state.team_report_text = team_text
-                st.success("Report text extracted. Review it below before verifying.")
-            except Exception as exc:
-                st.error(f"Could not extract screenshot text: {exc}")
-    else:
-        pdf = st.file_uploader("Upload team report PDF", type=["pdf"], key="team_pdf")
-        if pdf is not None and st.button("Extract Report Text", key="extract_pdf"):
-            try:
-                team_text = extract_upload_text(pdf)
-                st.session_state.team_report_text = team_text
-                st.success("Report text extracted. Review it below before verifying.")
-            except Exception as exc:
-                st.error(f"Could not extract PDF text: {exc}")
-
-    if mode == "Copy & Paste Text":
-        st.session_state.team_report_text = team_text
-
-    if st.session_state.team_report_text:
-        st.markdown("#### Extracted / pasted team report")
-        edited_text = st.text_area("Review or correct report text before verification", value=st.session_state.team_report_text, height=220, key="team_report_review")
-        st.session_state.team_report_text = edited_text
-        rows, parse_errors = parse_team_text(edited_text)
-        if parse_errors:
-            st.warning("Some report lines could not be parsed. Correct these lines before verifying:")
-            st.code("\n".join(parse_errors))
-        if not rows.empty:
-            st.caption(f"Recognized {len(rows)} Sub ID rows.")
-            st.dataframe(rows[["Sub ID", "Team Leads", "Team Earnings"]], use_container_width=True, hide_index=True)
-        st.session_state.team_report_rows = rows
-
-    max_csv = st.file_uploader("Upload MaxBounty CSV", type=["csv", "xlsx"], key="payments_maxbounty_csv")
-    if st.button("Verify Payments", type="primary"):
-        if not st.session_state.team_report_text.strip():
-            st.error("Provide the team report first: paste text or upload a screenshot/PDF and extract its text.")
-        elif max_csv is None:
-            st.error("Upload the MaxBounty CSV first.")
+# ----------------------------- Voice -----------------------------
+elif page=="Voice Assistant":
+    st.markdown('<div class="eyebrow">VOICE INTERFACE</div>',unsafe_allow_html=True)
+    st.title("◉ JARVIS Voice Assistant")
+    st.caption("Record a message in Bengali or English. Zayan transcribes it, replies, and can speak the answer.")
+    if not client:
+        st.warning("Voice AI needs OPENAI_API_KEY in Streamlit Secrets.")
+    audio=st.audio_input("🎙️ Press to record your message",key="jarvis_audio")
+    speak=st.toggle("Speak Zayan's reply aloud",value=True)
+    if st.button("Send voice to Zayan",type="primary",use_container_width=True):
+        if audio is None: st.warning("আগে microphone দিয়ে voice record করো।")
+        elif not client: st.error("OPENAI_API_KEY is missing.")
         else:
             try:
-                team_rows, parse_errors = parse_team_text(st.session_state.team_report_text)
-                if parse_errors:
-                    st.error("Some report lines could not be parsed. Correct the lines shown above before verifying.")
-                elif team_rows.empty:
-                    st.error("No Sub ID rows were recognized. Check the report text format.")
+                raw=audio.getvalue()
+                import hashlib
+                digest=hashlib.sha256(raw).hexdigest()
+                if digest==st.session_state.last_audio_hash: st.info("এই voice message ইতিমধ্যে পাঠানো হয়েছে।")
                 else:
-                    max_rows = normalize_maxbounty(max_csv)
-                    combined = team_rows.copy()
-                    combined["Sub ID key"] = combined["Sub ID"].apply(clean_subid)
-                    max_rows["Sub ID key"] = max_rows["Sub ID"].apply(clean_subid)
-                    merged = combined.merge(max_rows, on="Sub ID key", how="outer", suffixes=("_Team", "_MaxBounty"), indicator=True)
-                    merged["Sub ID"] = merged["Sub ID_Team"].fillna(merged["Sub ID_MaxBounty"])
-                    merged["Team Leads"] = merged["Team Leads"].fillna(0)
-                    merged["Team Earnings"] = merged["Team Earnings"].fillna(0)
-                    merged["Leads"] = merged["Leads"].fillna(0)
-                    merged["Earnings"] = merged["Earnings"].fillna(0)
-                    merged["Lead Difference (Team - MaxBounty)"] = merged["Team Leads"] - merged["Leads"]
-                    merged["Dollar Difference (Team - MaxBounty)"] = merged["Team Earnings"] - merged["Earnings"]
-                    merged["Status"] = merged.apply(
-                        lambda r: "Matched" if r["_merge"] == "both" and abs(r["Lead Difference (Team - MaxBounty)"]) < 1e-9 and abs(r["Dollar Difference (Team - MaxBounty)"]) < 0.011 else "Mismatch",
-                        axis=1,
-                    )
-                    st.markdown("### Verification Results")
-                    counts = st.columns(3)
-                    counts[0].metric("Matched Sub IDs", int((merged["Status"] == "Matched").sum()))
-                    counts[1].metric("Mismatched Sub IDs", int((merged["Status"] == "Mismatch").sum()))
-                    counts[2].metric("Team Report Total", f"${team_rows['Team Earnings'].sum():,.2f}")
-                    show_cols = [
-                        "Sub ID", "Team Leads", "Leads", "Lead Difference (Team - MaxBounty)",
-                        "Team Earnings", "Earnings", "Dollar Difference (Team - MaxBounty)", "Status"
-                    ]
-                    st.dataframe(merged[show_cols].sort_values(["Status", "Sub ID"]), use_container_width=True, hide_index=True)
-                    st.markdown("### Combined Totals")
-                    total_cols = st.columns(4)
-                    total_cols[0].metric("Team Leads", f"{team_rows['Team Leads'].sum():,.0f}")
-                    total_cols[1].metric("MaxBounty Leads", f"{max_rows['Leads'].sum():,.0f}")
-                    total_cols[2].metric("Team Dollars", f"${team_rows['Team Earnings'].sum():,.2f}")
-                    total_cols[3].metric("MaxBounty Earnings", f"${max_rows['Earnings'].sum():,.2f}")
-                    st.caption("A mismatch may mean the reports cover different dates, a Sub ID is missing on one side, or the CSV uses a different column format.")
-            except Exception as exc:
-                st.error(f"Verification failed: {exc}")
+                    st.session_state.last_audio_hash=digest
+                    with st.spinner("শুনছি এবং উত্তর তৈরি করছি..."):
+                        with tempfile.NamedTemporaryFile(delete=False,suffix=".wav") as f:
+                            f.write(raw); path=f.name
+                        try:
+                            with open(path,"rb") as af:
+                                tr=client.audio.transcriptions.create(model="whisper-1",file=af)
+                        finally: os.unlink(path)
+                        spoken=(tr.text or "").strip()
+                        if not spoken: st.warning("কথা পরিষ্কার শোনা যায়নি। আবার চেষ্টা করো।")
+                        else:
+                            st.info("তুমি বলেছ: "+spoken)
+                            ans=ask_ai(spoken,speak=speak)
+                            st.markdown("### Zayan AI")
+                            st.markdown(ans)
+                            if speak and getattr(st.session_state,"last_tts",None):
+                                st.audio(st.session_state.last_tts,format="audio/mp3")
+            except Exception as e: st.error(f"Voice processing error: {e}")
+    st.divider()
+    st.markdown("**Browser permission:** Chrome address bar-এর site settings থেকে Microphone → Allow করতে হবে।")
 
+# ----------------------------- Reports -----------------------------
+elif page=="Business Reports":
+    st.markdown('<div class="eyebrow">AFFILIATE INTELLIGENCE</div>',unsafe_allow_html=True)
+    st.title("▤ Business Reports & Sub ID Analytics")
+    st.caption("Upload MaxBounty or advertiser reports in CSV/XLSX/PDF. Data is grouped by Sub ID.")
+    upload=st.file_uploader("Upload affiliate report",type=["csv","xlsx","xls","pdf"],key="main_report")
+    if upload:
+        try:
+            df=load_report(upload); st.session_state.report_df=df
+            st.success(f"Report loaded: {len(df):,} unique Sub IDs")
+        except Exception as e: st.error(str(e))
+    df=st.session_state.report_df
+    if df is not None:
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric("Clicks",f"{df.Clicks.sum():,.0f}")
+        c2.metric("Leads",f"{df.Leads.sum():,.0f}")
+        c3.metric("Earnings",currency(df.Earnings.sum()))
+        c4.metric("Avg. EPC",currency(df.Earnings.sum()/df.Clicks.sum()) if df.Clicks.sum() else "$0.00")
+        search=st.text_input("Search Sub IDs (partial match; one or more separated by comma/newline)",placeholder="SD_TU_santo, IQ_748")
+        if search.strip():
+            terms=[x.strip().casefold() for x in re.split(r"[,;\n]+",search) if x.strip()]
+            filtered=df[df["Sub ID"].str.casefold().apply(lambda x:any(t in x for t in terms))]
+        else: filtered=df
+        st.dataframe(filtered,use_container_width=True,hide_index=True)
+        st.download_button("Download filtered report CSV",filtered.to_csv(index=False).encode("utf-8-sig"),"zayan_filtered_report.csv","text/csv")
+        st.subheader("Offer-level summary")
+        st.caption("Offer is inferred from Sub ID text. Review grouping if your naming convention differs.")
+        df2=df.copy()
+        df2["Offer / Group"]=df2["Sub ID"].str.extract(r"(?i)(TU|TRANSUNION|IDENTITYIQ|IQ|CLICKFREE|CFS|EQUIFAX|EQUIFIX|SUPER|SPIKE|WHITEBRIDGE)",expand=False).fillna("Other").str.upper()
+        summary=df2.groupby("Offer / Group",as_index=False)[["Clicks","Leads","Sales","Earnings"]].sum()
+        st.dataframe(summary,use_container_width=True,hide_index=True)
+        st.bar_chart(summary.set_index("Offer / Group")[["Leads","Earnings"]])
+    else: st.info("কোনো report upload করা হয়নি। CSV/XLSX report upload করলে analytics দেখা যাবে।")
+    st.divider()
+    st.subheader("Team report vs Network report")
+    team_file=st.file_uploader("Upload team report (CSV/XLSX)",type=["csv","xlsx"],key="team_report_upload")
+    network_file=st.file_uploader("Upload MaxBounty/network report (CSV/XLSX)",type=["csv","xlsx"],key="network_report_upload")
+    if team_file and network_file:
+        try:
+            tdf=load_report(team_file); ndf=load_report(network_file)
+            merged=tdf.merge(ndf,on="Sub ID",how="outer",suffixes=("_team","_network")).fillna(0)
+            merged["Lead Difference"]=merged["Leads_team"]-merged["Leads_network"]
+            merged["Earnings Difference"]=merged["Earnings_team"]-merged["Earnings_network"]
+            st.dataframe(merged,use_container_width=True,hide_index=True)
+            st.download_button("Download reconciliation CSV",merged.to_csv(index=False).encode("utf-8-sig"),"zayan_reconciliation.csv","text/csv")
+        except Exception as e: st.error(f"Report comparison error: {e}")
 
-    st.markdown("""
-    <div class="zayan-footer">
-      Zayan AI · Private Business Workspace · Built for smarter decisions
-    </div>
-    """, unsafe_allow_html=True)
+# ----------------------------- Payments -----------------------------
+elif page=="Payments":
+    st.markdown('<div class="eyebrow">FINANCE CONTROL</div>',unsafe_allow_html=True)
+    st.title("▣ Payments & Ledger")
+    st.caption("Track payment obligations and reconciliation. This module records payments; it does not transfer money.")
+    p1,p2,p3=st.columns(3)
+    rows=query("SELECT status,COALESCE(SUM(amount),0) total FROM payments GROUP BY status")
+    totals={r["status"]:r["total"] for r in rows}
+    p1.metric("Pending",currency(totals.get("Pending",0)))
+    p2.metric("Paid",currency(totals.get("Paid",0)))
+    p3.metric("On hold",currency(totals.get("On Hold",0)))
+    with st.form("add_payment",clear_on_submit=True):
+        st.subheader("Add payment record")
+        c1,c2,c3=st.columns(3)
+        member=c1.text_input("Team member / recipient")
+        period=c2.text_input("Period",placeholder="2026-W44 / Oct 26–Nov 1")
+        amount=c3.number_input("Amount (USD)",min_value=0.0,step=1.0)
+        status=st.selectbox("Status",["Pending","Paid","On Hold"])
+        ref=st.text_input("Reference / transaction ID")
+        notes=st.text_input("Notes")
+        save=st.form_submit_button("Save payment record")
+    if save:
+        if not member.strip() or amount<=0: st.error("Recipient and amount are required.")
+        else:
+            execute("INSERT INTO payments(member_name,period,amount,currency,status,reference,notes,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (member.strip(),period,amount,"USD",status,ref,notes,datetime.now().isoformat(timespec="seconds")))
+            st.success("Payment record saved."); st.rerun()
+    payments=query("SELECT * FROM payments ORDER BY id DESC LIMIT 500")
+    if payments:
+        pdf=pd.DataFrame([dict(r) for r in payments])
+        st.dataframe(pdf,use_container_width=True,hide_index=True)
+        st.download_button("Export payment ledger CSV",pdf.to_csv(index=False).encode("utf-8-sig"),"zayan_payment_ledger.csv","text/csv")
+        with st.expander("Update payment status"):
+            pid=st.selectbox("Payment record ID",[r["id"] for r in payments])
+            newstatus=st.selectbox("New status",["Pending","Paid","On Hold"])
+            if st.button("Update status"):
+                execute("UPDATE payments SET status=? WHERE id=?",(newstatus,pid)); st.success("Status updated."); st.rerun()
+    else: st.info("No payment records yet.")
 
-elif active_page == "Settings":
-    st.subheader("⚙️ Workspace Settings")
-    st.write("Manage your Zayan AI workspace session.")
-    if st.button("Log out", type="secondary"):
-        st.session_state.authenticated = False
-        st.session_state.active_page = "Overview"
+# ----------------------------- Team -----------------------------
+elif page=="Team Management":
+    st.markdown('<div class="eyebrow">PEOPLE & OPERATIONS</div>',unsafe_allow_html=True)
+    st.title("♙ Team Management")
+    with st.form("add_member",clear_on_submit=True):
+        n=st.text_input("Member name")
+        w=st.text_input("WhatsApp / contact (optional)")
+        g=st.text_input("Group / offer")
+        add=st.form_submit_button("Add team member")
+    if add:
+        if n.strip():
+            execute("INSERT INTO team(member_name,whatsapp,group_name,created_at) VALUES(?,?,?,?)",(n.strip(),w.strip(),g.strip(),datetime.now().isoformat(timespec="seconds")))
+            st.success("Team member added."); st.rerun()
+        else: st.error("Name is required.")
+    members=query("SELECT * FROM team ORDER BY member_name")
+    if members:
+        mdf=pd.DataFrame([dict(r) for r in members])
+        st.dataframe(mdf,use_container_width=True,hide_index=True)
+        with st.expander("Deactivate or remove a member"):
+            mid=st.selectbox("Member ID",[r["id"] for r in members])
+            if st.button("Deactivate member"):
+                execute("UPDATE team SET active=0 WHERE id=?",(mid,)); st.success("Member deactivated."); st.rerun()
+            if st.button("Delete member record",type="secondary"):
+                execute("DELETE FROM team WHERE id=?",(mid,)); st.warning("Member deleted."); st.rerun()
+    else: st.info("Team directory is empty. Add your first team member.")
+
+# ----------------------------- Tasks -----------------------------
+elif page=="Tasks":
+    st.markdown('<div class="eyebrow">PERSONAL PRODUCTIVITY</div>',unsafe_allow_html=True)
+    st.title("✓ Tasks & Follow-ups")
+    with st.form("new_task",clear_on_submit=True):
+        title=st.text_input("Task")
+        c1,c2=st.columns(2)
+        due=c1.date_input("Due date",value=date.today())
+        priority=c2.selectbox("Priority",["Low","Normal","High","Urgent"],index=1)
+        notes=st.text_area("Notes (optional)")
+        add=st.form_submit_button("Add task")
+    if add:
+        if title.strip():
+            execute("INSERT INTO tasks(title,due_date,priority,status,notes,created_at) VALUES(?,?,?,?,?,?)",(title.strip(),due.isoformat(),priority,"Open",notes,datetime.now().isoformat(timespec="seconds")))
+            st.success("Task created."); st.rerun()
+        else: st.error("Task title is required.")
+    tasks=query("SELECT * FROM tasks ORDER BY CASE status WHEN 'Open' THEN 0 ELSE 1 END, due_date, id DESC")
+    if tasks:
+        for t in tasks:
+            with st.container(border=True):
+                c1,c2,c3=st.columns([4,1,1])
+                c1.markdown(f"**{t['title']}**  \n<span class='muted'>Due: {t['due_date'] or '—'} · Priority: {t['priority']} · {t['notes'] or ''}</span>",unsafe_allow_html=True)
+                c2.write(t["status"])
+                if t["status"]!="Done" and c3.button("Complete",key=f"done_{t['id']}"):
+                    execute("UPDATE tasks SET status='Done' WHERE id=?",(t["id"],)); st.rerun()
+                elif t["status"]=="Done" and c3.button("Reopen",key=f"open_{t['id']}"):
+                    execute("UPDATE tasks SET status='Open' WHERE id=?",(t["id"],)); st.rerun()
+    else: st.info("No tasks. Add a follow-up to get started.")
+
+# ----------------------------- Memory -----------------------------
+elif page=="Memory":
+    st.markdown('<div class="eyebrow">PERSONAL CONTEXT</div>',unsafe_allow_html=True)
+    st.title("◈ Zayan Memory")
+    st.caption("Save useful business preferences and working instructions. These are added to the AI context.")
+    with st.form("save_memory",clear_on_submit=True):
+        cat=st.selectbox("Category",["Business","Offers & Payouts","Team","Writing Preferences","Personal Workflow","Other"])
+        content=st.text_area("Memory / instruction")
+        save=st.form_submit_button("Save memory")
+    if save:
+        if content.strip():
+            execute("INSERT INTO memories(category,content,created_at) VALUES(?,?,?)",(cat,content.strip(),datetime.now().isoformat(timespec="seconds")))
+            st.success("Memory saved."); st.rerun()
+        else: st.error("Write a memory first.")
+    mem=query("SELECT * FROM memories ORDER BY id DESC")
+    if mem:
+        for m in mem:
+            with st.container(border=True):
+                st.markdown(f"**{m['category']}** · {m['created_at']}")
+                st.write(m["content"])
+                if st.button("Delete",key=f"delmem_{m['id']}"):
+                    execute("DELETE FROM memories WHERE id=?",(m["id"],)); st.rerun()
+    else: st.info("No saved memories yet.")
+
+# ----------------------------- Email assistant -----------------------------
+elif page=="Email Assistant":
+    st.markdown('<div class="eyebrow">COMMUNICATION COPILOT</div>',unsafe_allow_html=True)
+    st.title("✉ Email & Message Assistant")
+    st.caption("Generate professional English drafts for affiliate managers. Review and send them yourself.")
+    recipient=st.text_input("Manager / recipient name (optional)")
+    topic=st.text_input("What is the message about?",placeholder="Request weekly payment and payout increase")
+    details=st.text_area("Key points to include",placeholder="I have improved traffic quality. I can scale to 50 leads per day...")
+    tone=st.selectbox("Tone",["Professional and polite","Confident and firm","Short and direct","Friendly"])
+    if st.button("Generate English draft",type="primary"):
+        if not topic.strip() or not details.strip(): st.warning("Add the topic and key points first.")
+        elif not client: st.error("OpenAI API key is required.")
+        else:
+            with st.spinner("Drafting..."):
+                try:
+                    req=f"Write a concise natural English affiliate-manager email/message. Tone: {tone}. Recipient name: {recipient or 'Manager'}. Topic: {topic}. Include these points accurately: {details}. Do not invent facts, rates, volumes or promises. Provide only the draft."
+                    out=client.chat.completions.create(model="gpt-4o-mini",messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":req}])
+                    st.session_state.email_draft=out.choices[0].message.content
+                except Exception as e: st.error(str(e))
+    if st.session_state.get("email_draft"):
+        st.text_area("Your draft",st.session_state.email_draft,height=260)
+        st.download_button("Download draft TXT",st.session_state.email_draft.encode("utf-8"),"zayan_email_draft.txt","text/plain")
+
+# ----------------------------- Settings -----------------------------
+elif page=="Settings":
+    st.markdown('<div class="eyebrow">SYSTEM CONFIGURATION</div>',unsafe_allow_html=True)
+    st.title("⚙ Settings & Diagnostics")
+    st.subheader("Connection status")
+    s1,s2,s3=st.columns(3)
+    s1.metric("OpenAI API","Connected" if client else "Not connected")
+    s2.metric("Database","SQLite ready")
+    s3.metric("Voice input","Available" if client else "Needs API key")
+    st.subheader("Model and voice")
+    st.write("Chat model: `gpt-4o-mini`")
+    st.write("Transcription: `whisper-1`")
+    st.write("Speech output: `gpt-4o-mini-tts` · voice `alloy`")
+    st.info("To change API credentials, use Streamlit → Manage app → Settings → Secrets. Do not paste API keys into chat or GitHub.")
+    st.subheader("Data and backups")
+    st.warning("Streamlit Community Cloud local files are not guaranteed to persist across rebuilds. Download regular backups or connect a managed database before relying on this as your only business ledger.")
+    with st.expander("Export workspace database backup"):
+        if st.button("Prepare database backup"):
+            with open(DB_PATH,"rb") as f: st.session_state.db_backup=f.read()
+        if st.session_state.get("db_backup"):
+            st.download_button("Download SQLite backup",st.session_state.db_backup,"zayan_ai_backup.db","application/octet-stream")
+    st.subheader("Session")
+    if st.button("Log out"):
+        st.session_state.authenticated=False
+        st.session_state.chat_messages=[]
         st.rerun()
 
+st.divider()
+st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ZAYAN AI · JARVIS HYBRID BUSINESS OS · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
