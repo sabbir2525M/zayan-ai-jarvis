@@ -248,8 +248,9 @@ METRIC_CANDIDATES = {
     "Leads": ["conversions", "conversion", "approved_conversions",
               "leads", "lead", "approved_leads"],
     "Sales": ["sales", "sale", "orders", "order"],
-    "Earnings": ["total_earnings", "earnings", "commission",
-                 "commissions", "revenue", "payout", "amount"],
+    # Prefer the source's gross Payout if both Payout and derived Earnings exist.
+    "Earnings": ["payout", "total_earnings", "earnings", "commission",
+                 "commissions", "revenue", "amount"],
 }
 
 
@@ -389,8 +390,8 @@ def read_business_pdf(upload):
                 "Clicks": int(g["clicks"].replace(",", "")),
                 "Leads": int(g["conversions"].replace(",", "")),
                 "Sales": 0.0,
-                # Payout is the row's actual reported amount. No date/time digits
-                # or status text are ever included in this value.
+                # Use the gross Payout printed in the source report. Do not
+                # subtract ad spend, team cost, or any assumed rate here.
                 "Earnings": float(g["payout"].replace(",", "")),
             })
 
@@ -442,7 +443,7 @@ with st.sidebar:
     st.session_state.active_page=selected
     st.divider()
     st.caption("PRIVATE WORKSPACE · SECURE SESSION")
-    st.caption("Build: JARVIS Hybrid v1")
+    st.caption("Build: ELINA JARVIS Hybrid v2 · Payout-safe reports")
 
 page=st.session_state.active_page
 
@@ -554,7 +555,7 @@ elif page=="Business Reports":
     with upload_col:
         uploaded_file = st.file_uploader(
             "Upload CSV, Excel or PDF report", type=["csv", "xlsx", "xls", "pdf"],
-            key="business_csv", help="CSV/XLSX is preferred. Text-based PDFs are parsed by table columns and checked against the PDF footer when available."
+            key="business_csv", help="CSV/XLSX is preferred. PDF rows are parsed by table structure; Payout is preferred over derived Earnings, and totals are checked against the PDF footer when available."
         )
     with search_col:
         search_text = st.text_area(
@@ -590,6 +591,8 @@ elif page=="Business Reports":
                 for metric, column in metric_map.items()
             )
             st.caption("Detected report columns — " + mapped)
+            if metric_map.get("Earnings") and norm(metric_map["Earnings"]) == "payout":
+                st.info("Gross payout mode: the source Payout column is used as Earnings. No ad spend, team cost, or assumed rate is deducted.")
         if "pdf_extracted_totals" in report_df.attrs:
             extracted = report_df.attrs["pdf_extracted_totals"]
             expected = report_df.attrs.get("pdf_footer_totals")
@@ -871,4 +874,4 @@ elif page=="Settings":
         st.rerun()
 
 st.divider()
-st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ELINA AI · JARVIS HYBRID BUSINESS OS · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ELINA AI · JARVIS HYBRID BUSINESS OS v2 · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
