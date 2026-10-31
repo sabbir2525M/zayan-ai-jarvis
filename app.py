@@ -165,8 +165,9 @@ if not st.session_state.authenticated:
 
 # ----------------------------- Helpers -----------------------------
 SYSTEM_PROMPT = """You are ELINA AI, a private personal JARVIS-style assistant and affiliate marketing business copilot.
+Your owner's full name is Sabbir Alam. He is your Boss and the owner of this private workspace. Address him warmly and respectfully as Boss; use "Boss Sabbir" naturally, without forcing it into every sentence. Never confuse the owner's name with the AI's name: you are ELINA AI.
 Understand Bengali and English. Reply in the language the user uses; default to natural Bangla when they use Bangla.
-Be concise, practical and commercially aware. The user operates affiliate marketing campaigns, especially US credit-monitoring and identity-protection offers, uses Facebook Ads, manages a team, and needs help with affiliate reports, Sub IDs, payouts, payment reconciliation, tasks and professional English manager messages.
+Be concise, practical and commercially aware. The Boss operates affiliate marketing campaigns, especially US credit-monitoring and identity-protection offers, uses Facebook Ads, manages a team, and needs help with affiliate reports, Sub IDs, payouts, payment reconciliation, tasks and professional English manager messages.
 Never claim to have sent an email, transferred money, accessed an external affiliate account, or changed a live campaign unless a connected tool actually did so.
 When analyzing uploaded report context, rely on the supplied data and clearly distinguish actual values from estimates.
 """
@@ -397,9 +398,20 @@ page=st.session_state.active_page
 
 # ----------------------------- Overview -----------------------------
 if page=="Overview":
+    # Rotate the welcome line once per calendar day while always recognizing the owner.
+    daily_welcomes = [
+        "আজকে কী নিয়ে ভাবছেন? আমি কীভাবে সাহায্য করতে পারি?",
+        "আপনার আজকের পরিকল্পনা কী, Boss? ELINA প্রস্তুত।",
+        "নতুন দিন, নতুন পরিকল্পনা—বলুন Boss, কোথা থেকে শুরু করব?",
+        "আপনার কাজগুলো গুছিয়ে দিতে আমি প্রস্তুত, Boss Sabbir।",
+        "আজকের লক্ষ্য কী? চলুন একসাথে এগিয়ে যাই, Boss।",
+        "আপনাকে আবার পেয়ে ভালো লাগছে, Boss! কী করতে পারি?",
+        "আপনার পরবর্তী নির্দেশের অপেক্ষায় আছি, Boss Sabbir।",
+    ]
+    daily_welcome = daily_welcomes[date.today().toordinal() % len(daily_welcomes)]
     left,mid,right=st.columns([1.1,1,1.1],gap="large")
     with st.container():
-        st.markdown('<div class="hero"><div class="eyebrow">ELINA AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome back, Commander.</h1><p>Your business intelligence, affiliate operations and personal AI assistant — in one workspace.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
+        st.markdown(f'<div class="hero"><div class="eyebrow">ELINA AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome Boss Sabbir! 👋</h1><p>{daily_welcome}<br>Your personal AI assistant and business command center is ready.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
     with left:
         st.markdown('<div class="panel"><div class="smallcaps">IDENTITY</div><div class="panel-title">ELINA AI</div><div class="muted">Personal JARVIS Business Copilot</div><br><div class="smallcaps">INTERFACE MODE</div><div class="panel-title">Hybrid Command Center</div><div class="muted">Bengali + English · Desktop + Mobile</div></div>',unsafe_allow_html=True)
     with mid:
