@@ -118,6 +118,10 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_tasks_status_due ON tasks(status, due_date);
+        CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+        CREATE INDEX IF NOT EXISTS idx_chat_history_created ON chat_history(created_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_id ON memories(id DESC);
         """)
 init_db()
 
@@ -209,7 +213,7 @@ def ask_ai(prompt, speak=False):
                 report_context = f"\nCurrent uploaded report summary: {len(df)} rows; columns={list(df.columns)}."
             history = [{"role":"system","content":SYSTEM_PROMPT + "\nSaved memory:\n" + memory_text + report_context}]
             history += [{"role":m["role"],"content":m["content"]} for m in st.session_state.chat_messages[-16:]]
-            response = client.chat.completions.create(model="gpt-4o-mini", messages=history, temperature=0.5)
+            response = client.chat.completions.create(model="gpt-4o-mini", messages=history, temperature=0.5, max_tokens=900)
             answer = response.choices[0].message.content or "দুঃখিত, উত্তর তৈরি করা যায়নি।"
         except Exception as e:
             answer = f"AI connection error: {e}"
@@ -248,9 +252,8 @@ METRIC_CANDIDATES = {
     "Leads": ["conversions", "conversion", "approved_conversions",
               "leads", "lead", "approved_leads"],
     "Sales": ["sales", "sale", "orders", "order"],
-    # Prefer the source's gross Payout if both Payout and derived Earnings exist.
-    "Earnings": ["payout", "total_earnings", "earnings", "commission",
-                 "commissions", "revenue", "amount"],
+    "Earnings": ["total_earnings", "earnings", "commission",
+                 "commissions", "revenue", "payout", "amount"],
 }
 
 
@@ -322,6 +325,31 @@ def load_report(upload):
     return out
 
 
+@st.cache_data(show_spinner=False, ttl=1800, max_entries=8)
+def load_report_cached(filename: str, file_bytes: bytes):
+    """Parse an uploaded report once and reuse the result across reruns."""
+    return load_report(BytesIO(file_bytes_with_name(file_bytes, filename)))
+
+
+def file_bytes_with_name(file_bytes: bytes, filename: str):
+    """Return a named in-memory upload compatible with load_report()."""
+    buffer = BytesIO(file_bytes)
+    buffer.name = filename
+    return buffer
+
+
+@st.cache_data(show_spinner=False, ttl=3600, max_entries=32)
+def dataframe_csv_bytes(dataframe: pd.DataFrame):
+    return dataframe.to_csv(index=False).encode("utf-8-sig")
+
+
+@st.cache_data(show_spinner=False, ttl=3600, max_entries=16)
+def dataframe_excel_bytes(dataframe: pd.DataFrame):
+    buffer = BytesIO()
+    dataframe.to_excel(buffer, index=False, engine="openpyxl")
+    return buffer.getvalue()
+
+
 def read_business_pdf(upload):
     """Read table-based affiliate PDFs by row structure, never by scraping every number.
 
@@ -390,8 +418,8 @@ def read_business_pdf(upload):
                 "Clicks": int(g["clicks"].replace(",", "")),
                 "Leads": int(g["conversions"].replace(",", "")),
                 "Sales": 0.0,
-                # Use the gross Payout printed in the source report. Do not
-                # subtract ad spend, team cost, or any assumed rate here.
+                # Payout is the row's actual reported amount. No date/time digits
+                # or status text are ever included in this value.
                 "Earnings": float(g["payout"].replace(",", "")),
             })
 
@@ -443,7 +471,7 @@ with st.sidebar:
     st.session_state.active_page=selected
     st.divider()
     st.caption("PRIVATE WORKSPACE · SECURE SESSION")
-    st.caption("Build: ELINA JARVIS Hybrid v2 · Payout-safe reports")
+    st.caption("Build: JARVIS Hybrid v2 · Performance Optimized")
 
 page=st.session_state.active_page
 
@@ -555,7 +583,7 @@ elif page=="Business Reports":
     with upload_col:
         uploaded_file = st.file_uploader(
             "Upload CSV, Excel or PDF report", type=["csv", "xlsx", "xls", "pdf"],
-            key="business_csv", help="CSV/XLSX is preferred. PDF rows are parsed by table structure; Payout is preferred over derived Earnings, and totals are checked against the PDF footer when available."
+            key="business_csv", help="CSV/XLSX is preferred. Text-based PDFs are parsed by table columns and checked against the PDF footer when available."
         )
     with search_col:
         search_text = st.text_area(
@@ -566,10 +594,12 @@ elif page=="Business Reports":
         search_clicked = st.button("🔍 Search & Calculate", type="primary", key="business_search")
 
     if uploaded_file is not None:
-        upload_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+        upload_bytes = uploaded_file.getvalue()
+        upload_hash = hashlib.sha256(upload_bytes).hexdigest()
         if upload_hash != st.session_state.report_source_hash:
             try:
-                loaded_df = load_report(uploaded_file)
+                with st.spinner("Report বিশ্লেষণ করছি..."):
+                    loaded_df = load_report_cached(uploaded_file.name, upload_bytes)
                 st.session_state.report_df = loaded_df
                 st.session_state.report_source_name = uploaded_file.name
                 st.session_state.report_source_hash = upload_hash
@@ -591,8 +621,6 @@ elif page=="Business Reports":
                 for metric, column in metric_map.items()
             )
             st.caption("Detected report columns — " + mapped)
-            if metric_map.get("Earnings") and norm(metric_map["Earnings"]) == "payout":
-                st.info("Gross payout mode: the source Payout column is used as Earnings. No ad spend, team cost, or assumed rate is deducted.")
         if "pdf_extracted_totals" in report_df.attrs:
             extracted = report_df.attrs["pdf_extracted_totals"]
             expected = report_df.attrs.get("pdf_footer_totals")
@@ -619,9 +647,12 @@ elif page=="Business Reports":
                 st.warning("Enter at least one Sub ID to search.")
                 st.session_state.business_selected_df = None
             else:
-                selected = report_df[report_df["Sub ID"].apply(
-                    lambda sid: any(term in clean_subid(sid) for term in requested)
-                )].copy()
+                # Vectorized matching is substantially faster on large exports.
+                normalized_ids = report_df["Sub ID"].astype(str).str.casefold()
+                match_mask = pd.Series(False, index=report_df.index)
+                for term in requested:
+                    match_mask |= normalized_ids.str.contains(re.escape(term), regex=True, na=False)
+                selected = report_df.loc[match_mask].copy()
                 if selected.empty:
                     st.warning("No matching Sub IDs found.")
                     st.session_state.business_selected_df = None
@@ -635,7 +666,7 @@ elif page=="Business Reports":
         selected = st.session_state.business_selected_df
         if selected is not None and not selected.empty:
             st.markdown("### 🔎 Selected Sub ID Results")
-            st.dataframe(selected, use_container_width=True, hide_index=True)
+            st.dataframe(selected, use_container_width=True, hide_index=True, height=420)
             st.markdown("### Combined Totals")
             total_cols = st.columns(3)
             for col, label in zip(total_cols, ["Clicks", "Conversions", "Earnings"]):
@@ -644,13 +675,12 @@ elif page=="Business Reports":
                 col.metric(label, display)
             d1, d2 = st.columns(2)
             with d1:
-                st.download_button("⬇️ Download selected report CSV", selected.to_csv(index=False).encode("utf-8-sig"),
+                st.download_button("⬇️ Download selected report CSV", dataframe_csv_bytes(selected),
                                    "elina_subid_results.csv", "text/csv", use_container_width=True)
             with d2:
                 try:
-                    excel_buffer = BytesIO()
-                    selected.to_excel(excel_buffer, index=False, engine="openpyxl")
-                    st.download_button("⬇️ Download selected report Excel", excel_buffer.getvalue(),
+                    excel_bytes = dataframe_excel_bytes(selected)
+                    st.download_button("⬇️ Download selected report Excel", excel_bytes,
                                        "elina_subid_results.xlsx",
                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                        use_container_width=True)
@@ -658,9 +688,15 @@ elif page=="Business Reports":
                     st.info("Excel download needs openpyxl. CSV download is available.")
 
         with st.expander("View complete uploaded report"):
-            st.dataframe(report_df, use_container_width=True, hide_index=True)
-            st.download_button("Download complete report CSV", report_df.to_csv(index=False).encode("utf-8-sig"),
-                               "elina_complete_report.csv", "text/csv")
+            if st.checkbox("Render full report table", key="render_full_report"):
+                st.dataframe(
+                    report_df, use_container_width=True, hide_index=True,
+                    height=520
+                )
+            st.download_button(
+                "Download complete report CSV", dataframe_csv_bytes(report_df),
+                "elina_complete_report.csv", "text/csv"
+            )
 
 
 # ----------------------------- Payments -----------------------------
@@ -874,4 +910,4 @@ elif page=="Settings":
         st.rerun()
 
 st.divider()
-st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ELINA AI · JARVIS HYBRID BUSINESS OS v2 · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ELINA AI · JARVIS HYBRID BUSINESS OS · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
