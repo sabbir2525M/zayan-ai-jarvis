@@ -16,10 +16,6 @@ try:
 except Exception:
     OpenAI = None
 
-try:
-    import fitz
-except Exception:
-    fitz = None
 
 load_dotenv()
 
@@ -67,16 +63,24 @@ hr{border-color:var(--line)}
 [data-testid="stSidebar"] [data-testid="stRadio"] label{padding:8px 10px;border-radius:9px}
 @media(max-width:800px){.hero{padding:22px}.hero h1{font-size:1.55rem}.core{min-height:170px}.core-ball{width:125px;height:125px}}
 
-.stApp:before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.22;
-background:radial-gradient(circle at 18% 22%,rgba(56,210,255,.18),transparent 26%),
-radial-gradient(circle at 82% 30%,rgba(130,95,255,.18),transparent 28%),
-radial-gradient(circle at 55% 90%,rgba(36,220,185,.10),transparent 25%);
-animation:elinaAmbient 22s ease-in-out infinite alternate}
-@keyframes elinaAmbient{from{transform:translate3d(-.5%,0,0) scale(1)}to{transform:translate3d(.5%,.7%,0) scale(1.035);filter:hue-rotate(24deg)}}
+.stApp:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;opacity:.30;
+background:radial-gradient(ellipse at 16% 24%,rgba(56,210,255,.22),transparent 28%),
+radial-gradient(ellipse at 82% 28%,rgba(130,95,255,.22),transparent 30%),
+radial-gradient(ellipse at 54% 88%,rgba(36,220,185,.14),transparent 28%),
+linear-gradient(125deg,transparent 35%,rgba(70,140,255,.045) 50%,transparent 65%);
+background-size:140% 140%,140% 140%,140% 140%,200% 200%;
+animation:elinaAmbient 28s ease-in-out infinite alternate;will-change:transform}
+@keyframes elinaAmbient{from{transform:translate3d(-.35%,0,0)}to{transform:translate3d(.35%,.5%,0)}}
 .core-ball{position:relative;isolation:isolate}
 .core-ball:before,.core-ball:after{content:"";position:absolute;inset:-13px;border-radius:50%;border:1px solid rgba(100,235,255,.55);z-index:-1;animation:elinaOrbit 11s linear infinite}
 .core-ball:after{inset:-25px;border-color:rgba(145,120,255,.4);animation-duration:17s;animation-direction:reverse}
 @keyframes elinaOrbit{to{transform:rotate(360deg) scale(1.04)}}
+.core-ball{animation:elinaCorePulse 4.5s ease-in-out infinite;overflow:visible}
+.core-ball:focus-within{filter:brightness(1.2)}
+@keyframes elinaCorePulse{0%,100%{filter:brightness(1);box-shadow:0 0 22px #27cfff,0 0 62px #1678c866}50%{filter:brightness(1.16);box-shadow:0 0 34px #27cfff,0 0 86px #7768ff77}}
+.core-ball b{font-size:1.02rem;letter-spacing:.03em;line-height:1.4}
+.core-ball small{font-size:.62rem;letter-spacing:.06em;text-transform:none;margin-top:5px}
+@media(prefers-reduced-motion:reduce){.stApp:before,.core-ball,.core-ball:before,.core-ball:after{animation:none!important;will-change:auto}}
 
 </style>
 """, unsafe_allow_html=True)
@@ -136,7 +140,11 @@ def get_secret(name, default=""):
 
 APP_PASSWORD = str(get_secret("APP_PASSWORD", ""))
 API_KEY = str(get_secret("OPENAI_API_KEY", ""))
-client = OpenAI(api_key=API_KEY) if OpenAI and API_KEY else None
+@st.cache_resource(show_spinner=False)
+def get_openai_client(api_key):
+    return OpenAI(api_key=api_key) if OpenAI and api_key else None
+
+client = get_openai_client(API_KEY)
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -178,13 +186,13 @@ if not st.session_state.authenticated:
 # ----------------------------- Helpers -----------------------------
 SYSTEM_PROMPT = """You are ELINA AI, a private personal JARVIS-style assistant and affiliate marketing business copilot.
 Your owner's name is Sabbir Alam. He is the owner of this private workspace.
-Address him naturally as "Boss" or "Sabbir" when appropriate. Never say "Boss Sabbir".
-Use "Welcome Boss" as the dashboard greeting. Do not force his name into every sentence.
+Address him naturally as "Boss"; do not say his name in the greeting. Never say "Boss Sabbir".
+Use "Welcome Boss" as the dashboard greeting.
 You are ELINA AI. Use a warm, natural, respectful feminine communication style in Bangla and English.
 Understand Bengali and English. Reply in the language the user uses; default to natural Bangla when they use Bangla.
 Be concise, practical and commercially aware. The Boss operates affiliate marketing campaigns, especially US credit-monitoring and identity-protection offers, uses Facebook Ads, manages a team, and needs help with affiliate reports, Sub IDs, payouts, payment reconciliation, tasks and professional English manager messages.
 Never claim to have sent an email, transferred money, accessed an external affiliate account, or changed a live campaign unless a connected tool actually did so.
-When analyzing uploaded report context, rely on the supplied data and clearly distinguish actual values from estimates.
+When analyzing uploaded report context, rely on the supplied data and clearly distinguish actual values from calculated projections.
 """
 
 def ask_ai(prompt, speak=False):
@@ -307,102 +315,129 @@ def load_report(upload):
         ["Clicks", "Leads", "Sales", "Earnings"]
     ].sum()
     out.attrs["metric_columns"] = metric_columns
+    for attr_name in ("pdf_footer_totals", "pdf_extracted_totals", "pdf_totals_verified"):
+        if attr_name in getattr(df, "attrs", {}):
+            out.attrs[attr_name] = df.attrs[attr_name]
     return out
 
 
 def read_business_pdf(upload):
-    """Extract affiliate report rows from text PDFs; use vision OCR for scanned pages when available."""
-    if fitz is None:
-        raise ValueError("PDF support missing. Add pymupdf to requirements.")
+    """Read table-based affiliate PDFs by row structure, never by scraping every number.
+
+    The date/time column is deliberately parsed as a single field so its digits can
+    never be mistaken for clicks, conversions, or payout.
+    """
+    try:
+        import fitz
+    except Exception as exc:
+        raise ValueError("PDF support missing. Add pymupdf to requirements.") from exc
+
     doc = fitz.open(stream=upload.getvalue(), filetype="pdf")
     rows = []
-
-    def parse_line(line):
-        raw = str(line).strip()
-        if not raw or re.search(r"^(sub\s*id|total|grand total|offer:|date:|exported|page\s)", raw, re.I):
-            return None
-        parts = re.split(r"\t+|\s{2,}", raw)
-        if len(parts) < 2:
-            parts = raw.split()
-        if len(parts) < 2:
-            return None
-        sid = parts[0].strip().strip("'\"")
-        if not re.search(r"[A-Za-z]", sid) or norm(sid) in {"subid", "total", "totals"}:
-            return None
-        nums = re.findall(r"\(?-?\$?[\d,]+(?:\.\d+)?%?\)?", " ".join(parts[1:]))
-        def number(value):
-            value = value.strip().replace("$", "").replace(",", "").replace("%", "")
-            if value.startswith("(") and value.endswith(")"):
-                value = "-" + value[1:-1]
-            try:
-                return float(value)
-            except ValueError:
-                return None
-        vals = [number(x) for x in nums]
-        vals = [x for x in vals if x is not None]
-        if len(vals) >= 6:  # MaxBounty: clicks, leads, CR, sales, earnings, EPC
-            clicks, leads, earnings = vals[0], vals[1], vals[4]
-        elif len(vals) == 3:  # clicks, leads, earnings
-            clicks, leads, earnings = vals
-        elif len(vals) == 2:  # leads, earnings (common advertiser export)
-            clicks, leads, earnings = None, vals[0], vals[1]
-        else:
-            return None
-        return {"Sub ID": sid, "Clicks": clicks, "Leads": leads, "Sales": None, "Earnings": earnings}
+    footer_totals = None
+    # This layout matches common affiliate exports with Sub ID / Clicks /
+    # Conversions / Status / Payout / Converted At columns.
+    table_row = re.compile(
+        r"^\s*(?P<subid>.+?)\s+(?P<clicks>[\d,]+)\s+(?P<conversions>[\d,]+)\s+"
+        r"(?P<status>Converted|No conversion)\s+\$(?P<payout>[\d,]+\.\d{2})\s+"
+        r"(?P<converted_at>(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})|-)\s*$",
+        re.I,
+    )
+    footer_re = re.compile(
+        r"Total Clicks:\s*([\d,]+)\s+Total Conversions:\s*([\d,]+)\s+"
+        r"Total Earnings:\s*\$([\d,]+\.\d{2})", re.I
+    )
+    # Some exports contain a row with clicks but an empty Sub ID. Preserve its
+    # metrics under an explicit label so the grand totals still reconcile.
+    blank_id_row = re.compile(
+        r"^\s*(?P<clicks>[\d,]+)\s+(?P<conversions>[\d,]+)\s+"
+        r"(?P<status>Converted|No conversion)\s+\$(?P<payout>[\d,]+\.\d{2})\s+"
+        r"(?P<converted_at>(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})|-)\s*$", re.I
+    )
 
     for page in doc:
-        page_rows = []
         for line in page.get_text("text", sort=True).splitlines():
-            item = parse_line(line)
-            if item:
-                page_rows.append(item)
-        # Rebuild table rows when PDF text extraction separates cells into coordinate-aligned words.
-        if not page_rows:
-            grouped = {}
-            for word in page.get_text("words"):
-                x0, y0, _x1, _y1, token = word[:5]
-                grouped.setdefault(round(y0 / 3) * 3, []).append((x0, token))
-            for y in sorted(grouped):
-                item = parse_line(" ".join(token for _, token in sorted(grouped[y])))
-                if item:
-                    page_rows.append(item)
-        # OCR scanned pages if OpenAI is configured.
-        if not page_rows and client is not None:
-            try:
-                import base64
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                encoded = base64.b64encode(pix.tobytes("png")).decode("ascii")
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini", temperature=0,
-                    messages=[
-                        {"role": "system", "content": "Extract affiliate report table rows exactly. Return TSV only with columns Sub ID, Clicks, Leads/Conversions, Earnings. Do not invent unreadable values."},
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "Transcribe report rows from this PDF page."},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}}
-                        ]}
-                    ]
-                )
-                for line in (response.choices[0].message.content or "").splitlines():
-                    item = parse_line(line)
-                    if item:
-                        page_rows.append(item)
-            except Exception:
-                pass
-        rows.extend(page_rows)
+            footer_match = footer_re.search(line)
+            if footer_match:
+                footer_totals = {
+                    "Clicks": int(footer_match.group(1).replace(",", "")),
+                    "Leads": int(footer_match.group(2).replace(",", "")),
+                    "Earnings": float(footer_match.group(3).replace(",", "")),
+                }
+                continue
+            match = table_row.match(line)
+            if not match:
+                blank_match = blank_id_row.match(line)
+                if blank_match:
+                    bg = blank_match.groupdict()
+                    rows.append({
+                        "Sub ID": "(blank Sub ID)",
+                        "Clicks": int(bg["clicks"].replace(",", "")),
+                        "Leads": int(bg["conversions"].replace(",", "")),
+                        "Sales": 0.0,
+                        "Earnings": float(bg["payout"].replace(",", "")),
+                    })
+                continue
+            g = match.groupdict()
+            sid = clean_subid(g["subid"])
+            if sid.casefold() in {"total", "totals", "sub id"}:
+                continue
+            if not sid:
+                sid = "(blank Sub ID)"
+            rows.append({
+                "Sub ID": sid,
+                "Clicks": int(g["clicks"].replace(",", "")),
+                "Leads": int(g["conversions"].replace(",", "")),
+                "Sales": 0.0,
+                # Payout is the row's actual reported amount. No date/time digits
+                # or status text are ever included in this value.
+                "Earnings": float(g["payout"].replace(",", "")),
+            })
+
     if not rows:
-        raise ValueError("PDF rows could not be extracted. For scanned PDFs configure OPENAI_API_KEY, or upload CSV/XLSX for the most reliable results.")
-    return pd.DataFrame(rows)
+        raise ValueError(
+            "Could not reliably read the PDF table. No totals were guessed. "
+            "Please upload the original CSV/XLSX export or a text-based PDF."
+        )
+
+    out = pd.DataFrame(rows)
+    # Aggregate duplicate Sub IDs only after each individual row is parsed.
+    out = out.groupby("Sub ID", as_index=False, sort=False)[
+        ["Clicks", "Leads", "Sales", "Earnings"]
+    ].sum()
+    out.attrs["pdf_footer_totals"] = footer_totals
+    out.attrs["pdf_extracted_totals"] = {
+        "Clicks": int(out["Clicks"].sum()),
+        "Leads": int(out["Leads"].sum()),
+        "Earnings": round(float(out["Earnings"].sum()), 2),
+    }
+    out.attrs["pdf_totals_verified"] = (
+        footer_totals is not None and out.attrs["pdf_extracted_totals"] == footer_totals
+    )
+    return out
 
 def currency(v):
     return f"${v:,.2f}"
 
 # ----------------------------- Sidebar -----------------------------
+def navigate_to(page_name):
+    st.session_state.active_page = page_name
+    st.session_state.nav_radio = page_name
+
+def run_quick_command():
+    quick_text = st.session_state.get("quick_command_text", "").strip()
+    if quick_text:
+        st.session_state.quick_result = ask_ai(quick_text)
+        navigate_to("AI Assistant")
+
 with st.sidebar:
     st.markdown('<div class="brand"><div class="brand-icon">✦</div><div><div class="brand-name">ELINA AI</div><div class="brand-sub">JARVIS BUSINESS OS</div></div></div>',unsafe_allow_html=True)
     st.markdown('<div class="smallcaps">COMMAND NAVIGATION</div>',unsafe_allow_html=True)
     pages=["Overview","AI Assistant","Voice Assistant","Business Reports","Payments","Team Management","Tasks","Memory","Email Assistant","Settings"]
     icons=["▦","✧","◉","▤","▣","♙","✓","◈","✉","⚙"]
     labels={p:f"{icons[i]}  {p}" for i,p in enumerate(pages)}
+    if st.session_state.get("nav_radio") not in pages:
+        st.session_state.nav_radio = st.session_state.active_page
     selected=st.radio("Navigation",pages,index=pages.index(st.session_state.active_page),format_func=lambda p:labels[p],label_visibility="collapsed",key="nav_radio")
     st.session_state.active_page=selected
     st.divider()
@@ -430,7 +465,7 @@ if page=="Overview":
     with left:
         st.markdown('<div class="panel"><div class="smallcaps">IDENTITY</div><div class="panel-title">ELINA AI</div><div class="muted">Personal JARVIS Business Copilot</div><br><div class="smallcaps">INTERFACE MODE</div><div class="panel-title">Hybrid Command Center</div><div class="muted">Bengali + English · Desktop + Mobile</div></div>',unsafe_allow_html=True)
     with mid:
-        st.markdown('<div class="core"><div class="core-ball"><div><b>ZA</b><small>AI CORE · ONLINE</small></div></div></div>',unsafe_allow_html=True)
+        st.markdown("<div class=\"core\"><div class=\"core-ball\"><div><b>Hey, It's me, Elina</b><small>Always here, Boss.</small></div></div></div>",unsafe_allow_html=True)
     with right:
         st.markdown('<div class="panel"><div class="smallcaps">SYSTEM STATUS</div><p>🟢 Workspace · Active</p><p>🟢 Navigation · Ready</p><p>🟢 Database · Connected</p><p>'+("🟢 OpenAI · Connected" if client else "🟠 OpenAI · API key missing")+'</p><p class="muted">Voice playback uses OpenAI TTS when enabled.</p></div>',unsafe_allow_html=True)
     st.subheader("Command Deck")
@@ -439,15 +474,12 @@ if page=="Overview":
     for col,(ico,title,desc) in zip(cols,cards):
         with col:
             st.markdown(f'<div class="panel"><div style="font-size:1.5rem;color:#5cdff7">{ico}</div><div class="panel-title">{title}</div><div class="muted">{desc}</div></div>',unsafe_allow_html=True)
-            if st.button(f"Open {title}",key="go_"+title,use_container_width=True):
-                st.session_state.active_page=title; st.rerun()
+            st.button(f"Open {title}", key="go_"+title, use_container_width=True,
+                      on_click=navigate_to, args=(title,))
     st.subheader("Quick Command")
     with st.form("quick_command"):
-        quick=st.text_input("Tell ELINA what you need",placeholder="যেমন: এই সপ্তাহের affiliate performance বিশ্লেষণ করো")
-        submitted=st.form_submit_button("Run command")
-    if submitted and quick:
-        st.session_state.quick_result=ask_ai(quick)
-        st.session_state.active_page="AI Assistant"; st.rerun()
+        st.text_input("Tell ELINA what you need", placeholder="যেমন: এই সপ্তাহের affiliate performance বিশ্লেষণ করো", key="quick_command_text")
+        st.form_submit_button("Run command", on_click=run_quick_command)
     st.caption("Note: Reports, memory, team and payment records are stored in the app database. Streamlit Cloud's local disk may reset on rebuild; connect durable external storage for long-term records.")
 
 # ----------------------------- AI Chat -----------------------------
@@ -522,7 +554,7 @@ elif page=="Business Reports":
     with upload_col:
         uploaded_file = st.file_uploader(
             "Upload CSV, Excel or PDF report", type=["csv", "xlsx", "xls", "pdf"],
-            key="business_csv", help="CSV/XLSX is preferred for exact totals. PDF extraction is best-effort."
+            key="business_csv", help="CSV/XLSX is preferred. Text-based PDFs are parsed by table columns and checked against the PDF footer when available."
         )
     with search_col:
         search_text = st.text_area(
@@ -558,8 +590,25 @@ elif page=="Business Reports":
                 for metric, column in metric_map.items()
             )
             st.caption("Detected report columns — " + mapped)
-        if uploaded_file is not None and uploaded_file.name.lower().endswith(".pdf"):
-            st.warning("PDF extraction is best-effort. Review extracted rows before using totals for team payments.")
+        if "pdf_extracted_totals" in report_df.attrs:
+            extracted = report_df.attrs["pdf_extracted_totals"]
+            expected = report_df.attrs.get("pdf_footer_totals")
+            if report_df.attrs.get("pdf_totals_verified"):
+                st.success(
+                    "PDF totals verified against the report footer: "
+                    f"{extracted['Clicks']:,} clicks · {extracted['Leads']:,} conversions · "
+                    f"${extracted['Earnings']:,.2f}."
+                )
+            elif expected:
+                st.error(
+                    "PDF totals do not match the report footer. Do not use these figures for payments. "
+                    f"Extracted: {extracted}; PDF footer: {expected}."
+                )
+            else:
+                st.warning(
+                    "No PDF footer total was found. Extracted rows are shown for review; "
+                    "verify against the source report before making payments."
+                )
 
         if search_clicked:
             requested = list(dict.fromkeys(clean_subid(x) for x in re.split(r"[,;\n]+", search_text) if x.strip()))
