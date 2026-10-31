@@ -23,7 +23,7 @@ except Exception:
 
 load_dotenv()
 
-APP_TITLE = "Zayan AI — JARVIS Business OS"
+APP_TITLE = "ELINA AI"
 DB_PATH = os.getenv("ZAYAN_DB_PATH", "zayan_ai_data.db")
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
