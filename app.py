@@ -23,7 +23,7 @@ except Exception:
 
 load_dotenv()
 
-APP_TITLE = "ELINA AI"
+APP_TITLE = "ELINA AI — JARVIS Business OS"
 DB_PATH = os.getenv("ZAYAN_DB_PATH", "zayan_ai_data.db")
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
@@ -149,7 +149,7 @@ if not APP_PASSWORD:
     st.stop()
 
 if not st.session_state.authenticated:
-    st.markdown('<div class="hero"><div class="eyebrow">PRIVATE AI BUSINESS WORKSPACE</div><h1>🤖 Zayan AI — JARVIS</h1><p>Your personal command center for conversations, affiliate reporting, team operations and payments.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><div class="eyebrow">PRIVATE AI BUSINESS WORKSPACE</div><h1>🤖 ELINA AI — JARVIS</h1><p>Your personal command center for conversations, affiliate reporting, team operations and payments.</p></div>', unsafe_allow_html=True)
     a,b,c = st.columns([1,1.2,1])
     with b:
         with st.container(border=True):
@@ -164,7 +164,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ----------------------------- Helpers -----------------------------
-SYSTEM_PROMPT = """You are Zayan AI, a private personal JARVIS-style assistant and affiliate marketing business copilot.
+SYSTEM_PROMPT = """You are ELINA AI, a private personal JARVIS-style assistant and affiliate marketing business copilot.
 Understand Bengali and English. Reply in the language the user uses; default to natural Bangla when they use Bangla.
 Be concise, practical and commercially aware. The user operates affiliate marketing campaigns, especially US credit-monitoring and identity-protection offers, uses Facebook Ads, manages a team, and needs help with affiliate reports, Sub IDs, payouts, payment reconciliation, tasks and professional English manager messages.
 Never claim to have sent an email, transferred money, accessed an external affiliate account, or changed a live campaign unless a connected tool actually did so.
@@ -295,41 +295,13 @@ def load_report(upload):
 
 
 def read_business_pdf(upload):
-    """Read affiliate PDF tables using explicit column positions and safe fallback parsing."""
+    """Extract affiliate report rows from text PDFs; use vision OCR for scanned pages when available."""
     if fitz is None:
         raise ValueError("PDF support missing. Add pymupdf to requirements.")
     doc = fitz.open(stream=upload.getvalue(), filetype="pdf")
     rows = []
 
-    # This layout matches common Sub ID Conversions exports:
-    # Sub ID | Clicks | Conversions | Status | Payout | Converted At
-    table_row = re.compile(
-        r"^\s*(?:(?P<sid>\S+)\s+)?"
-        r"(?P<clicks>[\d,]+)\s+"
-        r"(?P<conversions>[\d,]+)\s+"
-        r"(?P<status>Converted|No conversion)\s+"
-        r"\$(?P<payout>[\d,]+(?:\.\d{1,2})?)\s+"
-        r"(?P<converted_at>(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})|-)\s*$",
-        re.I
-    )
-
-    def parse_table_row(line):
-        match = table_row.match(str(line))
-        if not match:
-            return None
-        item = match.groupdict()
-        sid = (item["sid"] or "").strip()
-        if not sid:
-            sid = "Unassigned (blank Sub ID)"
-        return {
-            "Sub ID": sid,
-            "Clicks": float(item["clicks"].replace(",", "")),
-            "Leads": float(item["conversions"].replace(",", "")),
-            "Sales": 0.0,
-            "Earnings": float(item["payout"].replace(",", "")),
-        }
-
-    def parse_legacy_line(line):
+    def parse_line(line):
         raw = str(line).strip()
         if not raw or re.search(r"^(sub\s*id|total|grand total|offer:|date:|exported|page\s)", raw, re.I):
             return None
@@ -352,40 +324,33 @@ def read_business_pdf(upload):
                 return None
         vals = [number(x) for x in nums]
         vals = [x for x in vals if x is not None]
-        if len(vals) >= 6:
+        if len(vals) >= 6:  # MaxBounty: clicks, leads, CR, sales, earnings, EPC
             clicks, leads, earnings = vals[0], vals[1], vals[4]
-        elif len(vals) == 3:
+        elif len(vals) == 3:  # clicks, leads, earnings
             clicks, leads, earnings = vals
-        elif len(vals) == 2:
+        elif len(vals) == 2:  # leads, earnings (common advertiser export)
             clicks, leads, earnings = None, vals[0], vals[1]
         else:
             return None
-        return {"Sub ID": sid, "Clicks": clicks, "Leads": leads,
-                "Sales": 0.0, "Earnings": earnings}
+        return {"Sub ID": sid, "Clicks": clicks, "Leads": leads, "Sales": None, "Earnings": earnings}
 
     for page in doc:
         page_rows = []
-        lines = page.get_text("text", sort=True).splitlines()
-        for line in lines:
-            item = parse_table_row(line)
-            if item is None:
-                item = parse_legacy_line(line)
+        for line in page.get_text("text", sort=True).splitlines():
+            item = parse_line(line)
             if item:
                 page_rows.append(item)
-
-        # Rebuild rows from positioned words if text extraction did not return table rows.
+        # Rebuild table rows when PDF text extraction separates cells into coordinate-aligned words.
         if not page_rows:
             grouped = {}
             for word in page.get_text("words"):
                 x0, y0, _x1, _y1, token = word[:5]
                 grouped.setdefault(round(y0 / 3) * 3, []).append((x0, token))
             for y in sorted(grouped):
-                line = " ".join(token for _, token in sorted(grouped[y]))
-                item = parse_table_row(line) or parse_legacy_line(line)
+                item = parse_line(" ".join(token for _, token in sorted(grouped[y])))
                 if item:
                     page_rows.append(item)
-
-        # OCR fallback for scanned pages, only when OpenAI is configured.
+        # OCR scanned pages if OpenAI is configured.
         if not page_rows and client is not None:
             try:
                 import base64
@@ -394,8 +359,7 @@ def read_business_pdf(upload):
                 response = client.chat.completions.create(
                     model="gpt-4o-mini", temperature=0,
                     messages=[
-                        {"role": "system", "content":
-                         "Extract affiliate report rows exactly. Return TSV columns: Sub ID, Clicks, Conversions, Status, Payout, Converted At. Preserve blank Sub IDs as blank. Do not invent values."},
+                        {"role": "system", "content": "Extract affiliate report table rows exactly. Return TSV only with columns Sub ID, Clicks, Leads/Conversions, Earnings. Do not invent unreadable values."},
                         {"role": "user", "content": [
                             {"type": "text", "text": "Transcribe report rows from this PDF page."},
                             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}}
@@ -403,34 +367,22 @@ def read_business_pdf(upload):
                     ]
                 )
                 for line in (response.choices[0].message.content or "").splitlines():
-                    item = parse_table_row(line)
-                    if item is None:
-                        item = parse_legacy_line(line)
+                    item = parse_line(line)
                     if item:
                         page_rows.append(item)
             except Exception:
                 pass
         rows.extend(page_rows)
-
     if not rows:
-        raise ValueError(
-            "PDF rows could not be extracted. For scanned PDFs configure OPENAI_API_KEY, "
-            "or upload CSV/XLSX for the most reliable results."
-        )
-    result = pd.DataFrame(rows)
-    result.attrs["pdf_note"] = (
-        "Rows with a blank Sub ID are retained as 'Unassigned (blank Sub ID)' "
-        "so their clicks and earnings are not silently lost."
-    )
-    return result
-
+        raise ValueError("PDF rows could not be extracted. For scanned PDFs configure OPENAI_API_KEY, or upload CSV/XLSX for the most reliable results.")
+    return pd.DataFrame(rows)
 
 def currency(v):
     return f"${v:,.2f}"
 
 # ----------------------------- Sidebar -----------------------------
 with st.sidebar:
-    st.markdown('<div class="brand"><div class="brand-icon">✦</div><div><div class="brand-name">Zayan AI</div><div class="brand-sub">JARVIS BUSINESS OS</div></div></div>',unsafe_allow_html=True)
+    st.markdown('<div class="brand"><div class="brand-icon">✦</div><div><div class="brand-name">ELINA AI</div><div class="brand-sub">JARVIS BUSINESS OS</div></div></div>',unsafe_allow_html=True)
     st.markdown('<div class="smallcaps">COMMAND NAVIGATION</div>',unsafe_allow_html=True)
     pages=["Overview","AI Assistant","Voice Assistant","Business Reports","Payments","Team Management","Tasks","Memory","Email Assistant","Settings"]
     icons=["▦","✧","◉","▤","▣","♙","✓","◈","✉","⚙"]
@@ -447,9 +399,9 @@ page=st.session_state.active_page
 if page=="Overview":
     left,mid,right=st.columns([1.1,1,1.1],gap="large")
     with st.container():
-        st.markdown('<div class="hero"><div class="eyebrow">ZAYAN AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome back, Commander.</h1><p>Your business intelligence, affiliate operations and personal AI assistant — in one workspace.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
+        st.markdown('<div class="hero"><div class="eyebrow">ELINA AI / PERSONAL COMMAND CENTER</div><div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap"><div><h1>Welcome back, Commander.</h1><p>Your business intelligence, affiliate operations and personal AI assistant — in one workspace.</p></div><span class="status">● SYSTEM ONLINE</span></div></div>',unsafe_allow_html=True)
     with left:
-        st.markdown('<div class="panel"><div class="smallcaps">IDENTITY</div><div class="panel-title">ZAYAN AI</div><div class="muted">Personal JARVIS Business Copilot</div><br><div class="smallcaps">INTERFACE MODE</div><div class="panel-title">Hybrid Command Center</div><div class="muted">Bengali + English · Desktop + Mobile</div></div>',unsafe_allow_html=True)
+        st.markdown('<div class="panel"><div class="smallcaps">IDENTITY</div><div class="panel-title">ELINA AI</div><div class="muted">Personal JARVIS Business Copilot</div><br><div class="smallcaps">INTERFACE MODE</div><div class="panel-title">Hybrid Command Center</div><div class="muted">Bengali + English · Desktop + Mobile</div></div>',unsafe_allow_html=True)
     with mid:
         st.markdown('<div class="core"><div class="core-ball"><div><b>ZA</b><small>AI CORE · ONLINE</small></div></div></div>',unsafe_allow_html=True)
     with right:
@@ -464,7 +416,7 @@ if page=="Overview":
                 st.session_state.active_page=title; st.rerun()
     st.subheader("Quick Command")
     with st.form("quick_command"):
-        quick=st.text_input("Tell Zayan what you need",placeholder="যেমন: এই সপ্তাহের affiliate performance বিশ্লেষণ করো")
+        quick=st.text_input("Tell ELINA what you need",placeholder="যেমন: এই সপ্তাহের affiliate performance বিশ্লেষণ করো")
         submitted=st.form_submit_button("Run command")
     if submitted and quick:
         st.session_state.quick_result=ask_ai(quick)
@@ -474,15 +426,15 @@ if page=="Overview":
 # ----------------------------- AI Chat -----------------------------
 elif page=="AI Assistant":
     st.markdown('<div class="eyebrow">PERSONAL INTELLIGENCE</div>',unsafe_allow_html=True)
-    st.title("✧ Chat with Zayan AI")
+    st.title("✧ Chat with ELINA AI")
     st.caption("Bangla or English — ask about your business, campaigns, reports, planning or daily work.")
     for m in st.session_state.chat_messages:
         with st.chat_message(m["role"]): st.markdown(m["content"])
     if "quick_result" in st.session_state:
         st.success(st.session_state.pop("quick_result"))
-    prompt=st.chat_input("Ask Zayan AI anything...")
+    prompt=st.chat_input("Ask ELINA AI anything...")
     if prompt:
-        with st.spinner("Zayan is thinking..."):
+        with st.spinner("ELINA is thinking..."):
             ans=ask_ai(prompt)
         st.rerun()
     if st.session_state.chat_messages and st.session_state.chat_messages[-1]["role"]=="assistant":
@@ -498,12 +450,12 @@ elif page=="AI Assistant":
 elif page=="Voice Assistant":
     st.markdown('<div class="eyebrow">VOICE INTERFACE</div>',unsafe_allow_html=True)
     st.title("◉ JARVIS Voice Assistant")
-    st.caption("Record a message in Bengali or English. Zayan transcribes it, replies, and can speak the answer.")
+    st.caption("Record a message in Bengali or English. ELINA transcribes it, replies, and can speak the answer.")
     if not client:
         st.warning("Voice AI needs OPENAI_API_KEY in Streamlit Secrets.")
     audio=st.audio_input("🎙️ Press to record your message",key="jarvis_audio")
-    speak=st.toggle("Speak Zayan's reply aloud",value=True)
-    if st.button("Send voice to Zayan",type="primary",use_container_width=True):
+    speak=st.toggle("Speak ELINA's reply aloud",value=True)
+    if st.button("Send voice to ELINA",type="primary",use_container_width=True):
         if audio is None: st.warning("আগে microphone দিয়ে voice record করো।")
         elif not client: st.error("OPENAI_API_KEY is missing.")
         else:
@@ -526,7 +478,7 @@ elif page=="Voice Assistant":
                         else:
                             st.info("তুমি বলেছ: "+spoken)
                             ans=ask_ai(spoken,speak=speak)
-                            st.markdown("### Zayan AI")
+                            st.markdown("### ELINA AI")
                             st.markdown(ans)
                             if speak and getattr(st.session_state,"last_tts",None):
                                 st.audio(st.session_state.last_tts,format="audio/mp3")
@@ -581,9 +533,6 @@ elif page=="Business Reports":
             st.caption("Detected report columns — " + mapped)
         if uploaded_file is not None and uploaded_file.name.lower().endswith(".pdf"):
             st.warning("PDF extraction is best-effort. Review extracted rows before using totals for team payments.")
-            pdf_note = report_df.attrs.get("pdf_note")
-            if pdf_note:
-                st.caption(pdf_note)
 
         if search_clicked:
             requested = list(dict.fromkeys(clean_subid(x) for x in re.split(r"[,;\n]+", search_text) if x.strip()))
@@ -617,13 +566,13 @@ elif page=="Business Reports":
             d1, d2 = st.columns(2)
             with d1:
                 st.download_button("⬇️ Download selected report CSV", selected.to_csv(index=False).encode("utf-8-sig"),
-                                   "zayan_subid_results.csv", "text/csv", use_container_width=True)
+                                   "elina_subid_results.csv", "text/csv", use_container_width=True)
             with d2:
                 try:
                     excel_buffer = BytesIO()
                     selected.to_excel(excel_buffer, index=False, engine="openpyxl")
                     st.download_button("⬇️ Download selected report Excel", excel_buffer.getvalue(),
-                                       "zayan_subid_results.xlsx",
+                                       "elina_subid_results.xlsx",
                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                        use_container_width=True)
                 except ImportError:
@@ -632,7 +581,7 @@ elif page=="Business Reports":
         with st.expander("View complete uploaded report"):
             st.dataframe(report_df, use_container_width=True, hide_index=True)
             st.download_button("Download complete report CSV", report_df.to_csv(index=False).encode("utf-8-sig"),
-                               "zayan_complete_report.csv", "text/csv")
+                               "elina_complete_report.csv", "text/csv")
 
 
 # ----------------------------- Payments -----------------------------
@@ -666,7 +615,7 @@ elif page=="Payments":
     if payments:
         pdf=pd.DataFrame([dict(r) for r in payments])
         st.dataframe(pdf,use_container_width=True,hide_index=True)
-        st.download_button("Export payment ledger CSV",pdf.to_csv(index=False).encode("utf-8-sig"),"zayan_payment_ledger.csv","text/csv")
+        st.download_button("Export payment ledger CSV",pdf.to_csv(index=False).encode("utf-8-sig"),"elina_payment_ledger.csv","text/csv")
         with st.expander("Update payment status"):
             pid=st.selectbox("Payment record ID",[r["id"] for r in payments])
             newstatus=st.selectbox("New status",["Pending","Paid","On Hold"])
@@ -732,7 +681,7 @@ elif page=="Tasks":
 # ----------------------------- Memory -----------------------------
 elif page=="Memory":
     st.markdown('<div class="eyebrow">PERSONAL CONTEXT</div>',unsafe_allow_html=True)
-    st.title("◈ Zayan Memory")
+    st.title("◈ ELINA Memory")
     st.caption("Save useful business preferences and working instructions. These are added to the AI context.")
     with st.form("save_memory",clear_on_submit=True):
         cat=st.selectbox("Category",["Business","Offers & Payouts","Team","Writing Preferences","Personal Workflow","Other"])
@@ -774,7 +723,7 @@ elif page=="Email Assistant":
                 except Exception as e: st.error(str(e))
     if st.session_state.get("email_draft"):
         st.text_area("Your draft",st.session_state.email_draft,height=260)
-        st.download_button("Download draft TXT",st.session_state.email_draft.encode("utf-8"),"zayan_email_draft.txt","text/plain")
+        st.download_button("Download draft TXT",st.session_state.email_draft.encode("utf-8"),"elina_email_draft.txt","text/plain")
 
 # ----------------------------- Settings -----------------------------
 elif page=="Settings":
@@ -796,7 +745,7 @@ elif page=="Settings":
         if st.button("Prepare database backup"):
             with open(DB_PATH,"rb") as f: st.session_state.db_backup=f.read()
         if st.session_state.get("db_backup"):
-            st.download_button("Download SQLite backup",st.session_state.db_backup,"zayan_ai_backup.db","application/octet-stream")
+            st.download_button("Download SQLite backup",st.session_state.db_backup,"elina_ai_backup.db","application/octet-stream")
     st.subheader("Session")
     if st.button("Log out"):
         st.session_state.authenticated=False
@@ -804,4 +753,4 @@ elif page=="Settings":
         st.rerun()
 
 st.divider()
-st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ZAYAN AI · JARVIS HYBRID BUSINESS OS · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;color:#657b9f;font-size:.72rem;letter-spacing:.12em">ELINA AI · JARVIS HYBRID BUSINESS OS · PRIVATE WORKSPACE</div>',unsafe_allow_html=True)
