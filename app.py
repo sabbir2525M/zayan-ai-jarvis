@@ -140,8 +140,6 @@ if "report_source_name" not in st.session_state:
     st.session_state.report_source_name = ""
 if "report_source_hash" not in st.session_state:
     st.session_state.report_source_hash = ""
-if "network_df" not in st.session_state:
-    st.session_state.network_df = None
 if "last_audio_hash" not in st.session_state:
     st.session_state.last_audio_hash = None
 
@@ -210,57 +208,128 @@ def clean_subid(v):
     return str(v).strip().strip("'\"").casefold()
 
 def clean_num(series):
-    s = series.astype(str).str.replace(",","",regex=False).str.replace("$","",regex=False).str.replace("%","",regex=False)
-    s = s.str.replace(r"^\((.*)\)$",r"-\1",regex=True)
-    return pd.to_numeric(s,errors="coerce").fillna(0.0)
+    """Parse numeric report values without changing their magnitude."""
+    values = series.astype(str).str.strip()
+    values = values.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+    values = values.str.replace(r"[\$,£€\s]", "", regex=True)
+    values = values.str.replace(",", "", regex=False)
+    values = values.str.replace("%", "", regex=False)
+    values = values.replace({"": None, "nan": None, "None": None, "-": None})
+    return pd.to_numeric(values, errors="coerce").fillna(0.0)
 
-ALIASES = {
-    "Clicks":{"click","clicks","unique_clicks"},
-    "Leads":{"lead","leads","conversion","conversions","approved_leads"},
-    "Sales":{"sale","sales","orders","order"},
-    "Earnings":{"earning","earnings","revenue","commission","commissions","payout","amount","total_earnings"}
+
+# Priority order matters when an export contains several similar columns.
+METRIC_CANDIDATES = {
+    "Clicks": ["clicks", "unique_clicks", "click"],
+    "Leads": ["conversions", "conversion", "approved_conversions",
+              "leads", "lead", "approved_leads"],
+    "Sales": ["sales", "sale", "orders", "order"],
+    "Earnings": ["total_earnings", "earnings", "commission",
+                 "commissions", "revenue", "payout", "amount"],
 }
 
+
 def find_column(cols, aliases):
-    for col in cols:
-        if norm(col) in {norm(x) for x in aliases}:
-            return col
+    by_normalized = {norm(col): col for col in cols}
+    for alias in aliases:
+        found = by_normalized.get(norm(alias))
+        if found is not None:
+            return found
     return None
+
 
 def load_report(upload):
     name = upload.name.lower()
     upload.seek(0)
     if name.endswith(".csv"):
-        try: df = pd.read_csv(upload,dtype=str,encoding="utf-8-sig")
+        try:
+            df = pd.read_csv(upload, dtype=str, encoding="utf-8-sig")
         except UnicodeDecodeError:
-            upload.seek(0); df = pd.read_csv(upload,dtype=str,encoding="cp1252")
-    elif name.endswith((".xlsx",".xls")):
-        df = pd.read_excel(upload,dtype=str)
+            upload.seek(0)
+            df = pd.read_csv(upload, dtype=str, encoding="cp1252")
+    elif name.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(upload, dtype=str)
     elif name.endswith(".pdf"):
         df = read_business_pdf(upload)
-    else: raise ValueError("Use CSV, XLSX, XLS or PDF.")
-    df.columns=df.columns.astype(str).str.strip()
-    subcol=find_column(df.columns,{"subid","sub_id","sub id","sub id 1","subid1","tracking_sub_id"})
+    else:
+        raise ValueError("Use CSV, XLSX, XLS or PDF.")
+
+    df.columns = df.columns.astype(str).str.strip()
+    subcol = find_column(df.columns, ["sub_id", "subid", "tracking_sub_id"])
     if subcol is None:
-        subcol=next((c for c in df.columns if norm(c).startswith("subid")),None)
-    if subcol is None: raise ValueError("Sub ID column not found. Expected a column such as Sub ID or SubID 1.")
-    out=pd.DataFrame()
-    out["Sub ID"]=df[subcol].apply(clean_subid)
-    out=out[out["Sub ID"].ne("") & ~out["Sub ID"].str.lower().isin(["total","totals"])].copy()
-    for metric, aliases in ALIASES.items():
-        col=find_column(df.columns,aliases)
-        out[metric]=clean_num(df[col]) if col is not None else 0.0
-    return out.groupby("Sub ID",as_index=False)[["Clicks","Leads","Sales","Earnings"]].sum()
+        subcol = next((c for c in df.columns if norm(c).startswith("subid")), None)
+    if subcol is None:
+        raise ValueError("Sub ID column not found. Expected Sub ID, SubID or Sub ID 1.")
+
+    metric_columns = {
+        metric: find_column(df.columns, candidates)
+        for metric, candidates in METRIC_CANDIDATES.items()
+    }
+    if metric_columns["Leads"] is None:
+        raise ValueError(
+            "Conversions/Leads column was not found. Please check that the uploaded export "
+            "contains a Conversions, Conversion, Leads or Lead column."
+        )
+    if metric_columns["Earnings"] is None:
+        raise ValueError(
+            "Earnings column was not found. Please check that the uploaded export "
+            "contains Earnings, Revenue, Commission or Payout."
+        )
+
+    out = pd.DataFrame()
+    out["Sub ID"] = df[subcol].apply(clean_subid)
+    out = out[out["Sub ID"].ne("") & ~out["Sub ID"].str.casefold().isin(["total", "totals"])].copy()
+
+    for metric, source_col in metric_columns.items():
+        if source_col is None:
+            out[metric] = 0.0
+        else:
+            out[metric] = clean_num(df.loc[out.index, source_col])
+
+    # Aggregate repeated rows for the same Sub ID once, after parsing each source row.
+    out = out.groupby("Sub ID", as_index=False, sort=False)[
+        ["Clicks", "Leads", "Sales", "Earnings"]
+    ].sum()
+    out.attrs["metric_columns"] = metric_columns
+    return out
 
 
 def read_business_pdf(upload):
-    """Extract affiliate report rows from text PDFs; use vision OCR for scanned pages when available."""
+    """Read affiliate PDF tables using explicit column positions and safe fallback parsing."""
     if fitz is None:
         raise ValueError("PDF support missing. Add pymupdf to requirements.")
     doc = fitz.open(stream=upload.getvalue(), filetype="pdf")
     rows = []
 
-    def parse_line(line):
+    # This layout matches common Sub ID Conversions exports:
+    # Sub ID | Clicks | Conversions | Status | Payout | Converted At
+    table_row = re.compile(
+        r"^\s*(?:(?P<sid>\S+)\s+)?"
+        r"(?P<clicks>[\d,]+)\s+"
+        r"(?P<conversions>[\d,]+)\s+"
+        r"(?P<status>Converted|No conversion)\s+"
+        r"\$(?P<payout>[\d,]+(?:\.\d{1,2})?)\s+"
+        r"(?P<converted_at>(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})|-)\s*$",
+        re.I
+    )
+
+    def parse_table_row(line):
+        match = table_row.match(str(line))
+        if not match:
+            return None
+        item = match.groupdict()
+        sid = (item["sid"] or "").strip()
+        if not sid:
+            sid = "Unassigned (blank Sub ID)"
+        return {
+            "Sub ID": sid,
+            "Clicks": float(item["clicks"].replace(",", "")),
+            "Leads": float(item["conversions"].replace(",", "")),
+            "Sales": 0.0,
+            "Earnings": float(item["payout"].replace(",", "")),
+        }
+
+    def parse_legacy_line(line):
         raw = str(line).strip()
         if not raw or re.search(r"^(sub\s*id|total|grand total|offer:|date:|exported|page\s)", raw, re.I):
             return None
@@ -283,33 +352,40 @@ def read_business_pdf(upload):
                 return None
         vals = [number(x) for x in nums]
         vals = [x for x in vals if x is not None]
-        if len(vals) >= 6:  # MaxBounty: clicks, leads, CR, sales, earnings, EPC
+        if len(vals) >= 6:
             clicks, leads, earnings = vals[0], vals[1], vals[4]
-        elif len(vals) == 3:  # clicks, leads, earnings
+        elif len(vals) == 3:
             clicks, leads, earnings = vals
-        elif len(vals) == 2:  # leads, earnings (common advertiser export)
+        elif len(vals) == 2:
             clicks, leads, earnings = None, vals[0], vals[1]
         else:
             return None
-        return {"Sub ID": sid, "Clicks": clicks, "Leads": leads, "Sales": None, "Earnings": earnings}
+        return {"Sub ID": sid, "Clicks": clicks, "Leads": leads,
+                "Sales": 0.0, "Earnings": earnings}
 
     for page in doc:
         page_rows = []
-        for line in page.get_text("text", sort=True).splitlines():
-            item = parse_line(line)
+        lines = page.get_text("text", sort=True).splitlines()
+        for line in lines:
+            item = parse_table_row(line)
+            if item is None:
+                item = parse_legacy_line(line)
             if item:
                 page_rows.append(item)
-        # Rebuild table rows when PDF text extraction separates cells into coordinate-aligned words.
+
+        # Rebuild rows from positioned words if text extraction did not return table rows.
         if not page_rows:
             grouped = {}
             for word in page.get_text("words"):
                 x0, y0, _x1, _y1, token = word[:5]
                 grouped.setdefault(round(y0 / 3) * 3, []).append((x0, token))
             for y in sorted(grouped):
-                item = parse_line(" ".join(token for _, token in sorted(grouped[y])))
+                line = " ".join(token for _, token in sorted(grouped[y]))
+                item = parse_table_row(line) or parse_legacy_line(line)
                 if item:
                     page_rows.append(item)
-        # OCR scanned pages if OpenAI is configured.
+
+        # OCR fallback for scanned pages, only when OpenAI is configured.
         if not page_rows and client is not None:
             try:
                 import base64
@@ -318,7 +394,8 @@ def read_business_pdf(upload):
                 response = client.chat.completions.create(
                     model="gpt-4o-mini", temperature=0,
                     messages=[
-                        {"role": "system", "content": "Extract affiliate report table rows exactly. Return TSV only with columns Sub ID, Clicks, Leads/Conversions, Earnings. Do not invent unreadable values."},
+                        {"role": "system", "content":
+                         "Extract affiliate report rows exactly. Return TSV columns: Sub ID, Clicks, Conversions, Status, Payout, Converted At. Preserve blank Sub IDs as blank. Do not invent values."},
                         {"role": "user", "content": [
                             {"type": "text", "text": "Transcribe report rows from this PDF page."},
                             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}}
@@ -326,15 +403,27 @@ def read_business_pdf(upload):
                     ]
                 )
                 for line in (response.choices[0].message.content or "").splitlines():
-                    item = parse_line(line)
+                    item = parse_table_row(line)
+                    if item is None:
+                        item = parse_legacy_line(line)
                     if item:
                         page_rows.append(item)
             except Exception:
                 pass
         rows.extend(page_rows)
+
     if not rows:
-        raise ValueError("PDF rows could not be extracted. For scanned PDFs configure OPENAI_API_KEY, or upload CSV/XLSX for the most reliable results.")
-    return pd.DataFrame(rows)
+        raise ValueError(
+            "PDF rows could not be extracted. For scanned PDFs configure OPENAI_API_KEY, "
+            "or upload CSV/XLSX for the most reliable results."
+        )
+    result = pd.DataFrame(rows)
+    result.attrs["pdf_note"] = (
+        "Rows with a blank Sub ID are retained as 'Unassigned (blank Sub ID)' "
+        "so their clicks and earnings are not silently lost."
+    )
+    return result
+
 
 def currency(v):
     return f"${v:,.2f}"
@@ -483,8 +572,18 @@ elif page=="Business Reports":
     else:
         if st.session_state.report_source_name:
             st.caption(f"Current report: {st.session_state.report_source_name}")
+        metric_map = report_df.attrs.get("metric_columns", {})
+        if metric_map:
+            mapped = ", ".join(
+                f"{metric}: {column if column else 'not present'}"
+                for metric, column in metric_map.items()
+            )
+            st.caption("Detected report columns — " + mapped)
         if uploaded_file is not None and uploaded_file.name.lower().endswith(".pdf"):
             st.warning("PDF extraction is best-effort. Review extracted rows before using totals for team payments.")
+            pdf_note = report_df.attrs.get("pdf_note")
+            if pdf_note:
+                st.caption(pdf_note)
 
         if search_clicked:
             requested = list(dict.fromkeys(clean_subid(x) for x in re.split(r"[,;\n]+", search_text) if x.strip()))
@@ -495,15 +594,15 @@ elif page=="Business Reports":
                 selected = report_df[report_df["Sub ID"].apply(
                     lambda sid: any(term in clean_subid(sid) for term in requested)
                 )].copy()
-                # Only positive conversions/leads count; earnings are never treated as conversions.
-                selected = selected[pd.to_numeric(selected["Leads"], errors="coerce").fillna(0) > 0].copy()
                 if selected.empty:
-                    st.warning("No matching Sub IDs with positive conversions/leads found.")
+                    st.warning("No matching Sub IDs found.")
                     st.session_state.business_selected_df = None
                 else:
-                    selected = selected.groupby("Sub ID", as_index=False)[["Clicks", "Leads", "Earnings"]].sum(min_count=1)
+                    # load_report already aggregates duplicate rows by Sub ID.
+                    # Do not filter out zero-conversion rows: their clicks/earnings may still matter.
+                    selected = selected[["Sub ID", "Clicks", "Leads", "Earnings"]].copy()
                     selected = selected.rename(columns={"Leads": "Conversions"})
-                    st.session_state.business_selected_df = selected[["Sub ID", "Clicks", "Conversions", "Earnings"]]
+                    st.session_state.business_selected_df = selected
 
         selected = st.session_state.business_selected_df
         if selected is not None and not selected.empty:
@@ -535,26 +634,6 @@ elif page=="Business Reports":
             st.download_button("Download complete report CSV", report_df.to_csv(index=False).encode("utf-8-sig"),
                                "zayan_complete_report.csv", "text/csv")
 
-    st.divider()
-    st.subheader("Team report vs Network report")
-    st.caption("Compare your team's submitted figures against the MaxBounty/network export.")
-    team_col, network_col = st.columns(2, gap="large")
-    with team_col:
-        team_file = st.file_uploader("Upload team report (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="team_report_upload")
-    with network_col:
-        network_file = st.file_uploader("Upload MaxBounty/network report (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="network_report_upload")
-    if team_file and network_file:
-        try:
-            team_df, network_df = load_report(team_file), load_report(network_file)
-            merged = team_df.merge(network_df, on="Sub ID", how="outer", suffixes=("_team", "_network")).fillna(0)
-            merged["Lead Difference"] = merged["Leads_team"] - merged["Leads_network"]
-            merged["Earnings Difference"] = merged["Earnings_team"] - merged["Earnings_network"]
-            st.markdown("### Reconciliation Results")
-            st.dataframe(merged, use_container_width=True, hide_index=True)
-            st.download_button("⬇️ Download reconciliation CSV", merged.to_csv(index=False).encode("utf-8-sig"),
-                               "zayan_reconciliation.csv", "text/csv")
-        except Exception as e:
-            st.error(f"Report comparison error: {e}")
 
 # ----------------------------- Payments -----------------------------
 elif page=="Payments":
