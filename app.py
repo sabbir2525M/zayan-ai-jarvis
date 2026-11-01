@@ -262,6 +262,40 @@ def find_column(cols, aliases):
     return None
 
 
+def uploaded_file_to_bytes(upload):
+    """Return raw bytes from Streamlit UploadedFile or BytesIO-like wrappers."""
+    if isinstance(upload, bytes):
+        return upload
+    if isinstance(upload, (bytearray, memoryview)):
+        return bytes(upload)
+    value = None
+    if hasattr(upload, "getvalue"):
+        value = upload.getvalue()
+    elif hasattr(upload, "read"):
+        try:
+            upload.seek(0)
+        except Exception:
+            pass
+        value = upload.read()
+    else:
+        raise ValueError("Unsupported upload object. Please re-upload the report.")
+
+    # Some wrappers unexpectedly return a BytesIO object from getvalue().
+    # Unwrap it until the actual byte buffer is reached.
+    while hasattr(value, "getvalue"):
+        value = value.getvalue()
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    elif isinstance(value, bytearray):
+        value = bytes(value)
+    if not isinstance(value, bytes):
+        raise TypeError(
+            f"Upload wrapper returned {type(value).__name__}, not raw bytes. "
+            "Please re-upload the original report."
+        )
+    return value
+
+
 def load_report(upload):
     name = upload.name.lower()
     upload.seek(0)
@@ -332,7 +366,14 @@ def read_business_pdf(upload):
     except Exception as exc:
         raise ValueError("PDF support missing. Add pymupdf to requirements.") from exc
 
-    doc = fitz.open(stream=upload.getvalue(), filetype="pdf")
+    # Streamlit UploadedFile normally returns bytes from getvalue(), but some
+    # wrappers return an io.BytesIO object. PyMuPDF requires a bytes-like
+    # stream, not a BytesIO instance, so normalize it explicitly.
+    pdf_bytes = uploaded_file_to_bytes(upload)
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise ValueError("The uploaded file is not a valid PDF. Please upload the original PDF.")
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     rows = []
     footer_totals = None
     # This layout matches common affiliate exports with Sub ID / Clicks /
@@ -565,7 +606,7 @@ elif page=="Business Reports":
         search_clicked = st.button("🔍 Search & Calculate", type="primary", key="business_search")
 
     if uploaded_file is not None:
-        upload_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+        upload_hash = hashlib.sha256(uploaded_file_to_bytes(uploaded_file)).hexdigest()
         if upload_hash != st.session_state.report_source_hash:
             try:
                 loaded_df = load_report(uploaded_file)
